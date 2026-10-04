@@ -441,6 +441,25 @@ class LSQ
             return flags.isSet(Flag::IsSplit);
         }
 
+        /**
+         * SpaceSpec (SafeSpec DAC'19): mark every request this access
+         * comprises so its L1-D fill is diverted into the shadow cache rather
+         * than installed speculatively.
+         *
+         * All sub-requests are tagged, not just the main one: a split
+         * (unaligned) access spans two cache lines and produces one fill per
+         * line, so tagging only the first would let the second line reach L1
+         * speculatively.  The owning sequence number travels with each request
+         * so the cache can attribute the shadow entry.
+         */
+        void
+        setShadowFill(std::uint64_t owner_seq)
+        {
+            for (auto &r : _reqs) {
+                r->setShadowFill(owner_seq);
+            }
+        }
+
         bool
         needWBToRegister() const
         {

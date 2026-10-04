@@ -69,6 +69,11 @@ DebugFlag('PartitionPolicy')
 # folded into a SimObject, which is the whole point of splitting it out.
 GTest('shadow_buffer.test', 'shadow_buffer.test.cc')
 
+# Layer 1 wires the (unit-tested) shadow buffer into gem5 as a SimObject.
+SimObject('ShadowCache.py', sim_objects=['ShadowCache'])
+Source('shadow_cache.cc')
+DebugFlag('SpaceSpec', 'SpaceSpec shadow cache tracing')
+
 # CacheTags is so outrageously verbose, printing the cache's entire tag
 # array on each timing access, that you should probably have to ask for
 # it explicitly even above and beyond CacheAll.

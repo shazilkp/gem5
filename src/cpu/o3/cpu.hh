@@ -71,6 +71,7 @@
 #include "cpu/simple_thread.hh"
 #include "cpu/timebuf.hh"
 #include "cpu/lvp/load_value_prediction_unit.hh"
+#include "mem/cache/shadow_cache.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/process.hh"
 
@@ -466,6 +467,13 @@ class CPU : public BaseCPU
   public:
     /** Load Value Predictor (FLOP-paper model). */
     lvp::LoadValuePredictionUnit *lvp;
+
+    /**
+     * SpaceSpec shadow cache (SafeSpec DAC'19), or nullptr when the mechanism
+     * is disabled.  Must be the same object the guarded L1-D references: the
+     * cache fills it and this releases from it.
+     */
+    ShadowCache *shadowCache;
 
     /** Enum to give each stage a specific index, so when calling
      *  activateStage() or deactivateStage(), they can specify which stage

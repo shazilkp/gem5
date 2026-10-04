@@ -466,6 +466,30 @@ class Request : public Extensible<Request>
     /** Sequence number of the instruction that creates the request */
     InstSeqNum _reqInstSeqNum = 0;
 
+    /**
+     * SpaceSpec (SafeSpec DAC'19): when set, the fill for this read must be
+     * captured by the cache's ShadowCache rather than installed in the cache
+     * itself.  The line becomes resident only once the owning instruction
+     * commits.
+     *
+     * Set by the pipeline when it issues a load that has not yet retired, and
+     * consulted by the cache when the fill arrives.  It rides on the Request
+     * because a Request is the one piece of state shared by the CPU-side
+     * packet, the MSHR packet forwarded downstream, and the fill packet that
+     * returns -- so it survives the round trip without any extra plumbing.
+     *
+     * Always false unless a shadow cache is configured, so baseline gem5 is
+     * unaffected.
+     */
+    bool _shadowFill = false;
+
+    /**
+     * SpaceSpec: the sequence number of the load that owns this request's
+     * line.  The shadow entry is keyed on this, and it is what commit looks
+     * up to promote the line into the cache.
+     */
+    std::uint64_t _shadowOwnerSeq = 0;
+
     /** A pointer to an atomic operation */
     AtomicOpFunctorPtr atomicOpFunctor = nullptr;
 
@@ -524,6 +548,8 @@ class Request : public Extensible<Request>
           _taskId(other._taskId), _vaddr(other._vaddr),
           _extraData(other._extraData), _contextId(other._contextId),
           _pc(other._pc), _reqInstSeqNum(other._reqInstSeqNum),
+          _shadowFill(other._shadowFill),
+          _shadowOwnerSeq(other._shadowOwnerSeq),
           _localAccessor(other._localAccessor),
           translateDelta(other.translateDelta),
           accessDelta(other.accessDelta), depth(other.depth)
@@ -533,6 +559,34 @@ class Request : public Extensible<Request>
     }
 
     ~Request() {}
+
+    /**
+     * Mark this read's fill as one to be captured by a shadow cache rather
+     * than installed in the cache.
+     *
+     * @param ownerSeq  sequence number of the load that owns the line, used to
+     *                  attribute the shadow entry
+     */
+    void
+    setShadowFill(std::uint64_t ownerSeq)
+    {
+        _shadowFill = true;
+        _shadowOwnerSeq = ownerSeq;
+    }
+
+    /** True if this fill must be diverted into a shadow cache. */
+    bool
+    isShadowFill() const
+    {
+        return _shadowFill;
+    }
+
+    /** The owning load's sequence number. Only valid if isShadowFill(). */
+    std::uint64_t
+    shadowOwnerSeq() const
+    {
+        return _shadowOwnerSeq;
+    }
 
     /**
      * Factory method for creating memory management requests, with

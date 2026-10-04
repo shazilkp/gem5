@@ -182,6 +182,9 @@ class CacheBlk : public TaggedEntry
         if (other.wasPrefetched()) {
             setPrefetched();
         }
+        if (other.wasShadowInstalled()) {
+            setShadowInstalled();
+        }
         setCoherenceBits(other.coherence);
         setTaskId(other.getTaskId());
         setPartitionId(other.getPartitionId());
@@ -204,6 +207,7 @@ class CacheBlk : public TaggedEntry
         TaggedEntry::invalidate();
 
         clearPrefetched();
+        clearShadowInstalled();
         clearCoherenceBits(AllBits);
 
         setTaskId(context_switch_task_id::Unknown);
@@ -259,6 +263,28 @@ class CacheBlk : public TaggedEntry
 
     /** Marks this blocks as a recently prefetched block. */
     void setPrefetched() { _prefetched = true; }
+
+    /**
+     * SpaceSpec: was this block installed by promoting a line out of a
+     * ShadowCache, rather than by a normal fill response?
+     *
+     * Such a block is resident here but was never announced to the crossbar,
+     * so the snoop filter does not know this cache holds the line.  Sending a
+     * CleanEvict for it on eviction would trip the filter's "sender is not a
+     * holder" panic, so Cache::evictBlock() drops these blocks silently
+     * instead.
+     *
+     * This is sound because the line was fetched from memory and never
+     * written, so memory still holds the authoritative copy.  A write breaks
+     * that assumption, which is why a store to such a block forces a refetch.
+     */
+    bool wasShadowInstalled() const { return _shadowInstalled; }
+
+    /** Mark this block as installed via ShadowCache promotion. */
+    void setShadowInstalled() { _shadowInstalled = true; }
+
+    /** Clear the SpaceSpec promotion marker. */
+    void clearShadowInstalled() { _shadowInstalled = false; }
 
     /**
      * Get tick at which block's data will be available for access.
@@ -506,6 +532,9 @@ class CacheBlk : public TaggedEntry
 
     /** Whether this block is an unaccessed hardware prefetch. */
     bool _prefetched = 0;
+
+    /** SpaceSpec: installed via ShadowCache promotion, not a fill response. */
+    bool _shadowInstalled = false;
 };
 
 /**

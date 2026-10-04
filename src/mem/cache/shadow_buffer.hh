@@ -23,41 +23,88 @@
  *
  * Why oldest, which was the original mistake:
  *
- *   Binding the entry to a single specific instruction and looking it up by
- *   that instruction's sequence number at commit time is fragile.  If that
- *   instruction is squashed, or retires out of order, or its capture is
- *   dropped because the buffer was full, the lookup simply misses -- and
- *   nothing ever releases the entry.  The line then stays out of the real
- *   cache forever, so every later access to it misses, re-fetches and
- *   re-captures, without bound.  That is the livelock that ended the first
- *   implementation, and it presented as a hang rather than as a wrong
- *   answer, which is why it took a bisection to find.
+ *   The first implementation inserted each line under the newest load that
+ *   fetched it, then installed it by looking up the *committing* load's
+ *   sequence number.  Those two keys were never the same, so promote() never
+ *   matched, so the line never reached the cache.  Every access re-fetched and
+ *   re-captured it, without bound.  That is the livelock that ended the first
+ *   implementation, and it presented as a hang rather than as a wrong answer,
+ *   which is why it took a bisection to find.
  *
- *   Ordering by sequence number and always releasing the oldest entry instead
- *   makes release independent of any single instruction's fate.  If the
- *   owner is squashed, retirement walks past it and releases the next entry.
- *   There is no sequence number to get wrong, and no path that can retain an
- *   entry forever.
+ *   Taking the oldest capturing load as owner, and refreshing contents without
+ *   re-keying, removes that mismatch: the owner is the load whose commit will
+ *   release the line, by construction.
+ *
+ * Two further properties keep a missed release from mattering:
+ *
+ *   - A refresh keeps the ORIGINAL owner even when a younger load re-fetches
+ *     the line.  Re-keying to the newer load was the other half of the same
+ *     bug: the entry would then be released only by that newer load, and if it
+ *     were squashed in the meantime the entry was stranded.
+ *
+ *   - A lookup that misses is not fatal, because retireThrough() sweeps by
+ *     watermark regardless of which instruction asked.  So if the owner is
+ *     squashed, or its capture was refused because the buffer was full, or the
+ *     store dropped the line, the entry is reclaimed anyway once the watermark
+ *     passes.  promote() is the fast path that installs the line; the sweep is
+ *     what makes a miss harmless rather than permanent.
  *
  * ---------------------------------------------------------------------------
  * Lifetime
  * ---------------------------------------------------------------------------
- * Entries are released by exactly two events, both driven by the caller:
+ * Entries are added by one event and removed by four, all driven by the caller:
  *
- *   capture()   a line is added, tagged with the seqNum of its owner
- *   retire()    release every entry whose owner has committed or been
- *               squashed, i.e. whose owner is older than a watermark
+ *   capture()       a line is added, tagged with the seqNum of its owner
  *
- * The caller supplies that watermark.  This keeps the structure free of any
- * dependency on a ROB, a CPU or a thread model, and it means the buffer
- * cannot disagree with the pipeline about what has retired: the pipeline is
- * the single source of truth, and simply reports it.
+ *   promote()       the owner's load committed; hand the line out and install
+ *                   it in the real cache
+ *   discardFrom()   the owner was squashed; throw the line away
+ *   dropLine()      a store reached the line, making the held copy stale
+ *   retireThrough() a watermark sweep, run at retirement
  *
- * Because release is driven by a watermark rather than by per-entry events,
- * a squashed owner cannot strand its entry.  This is the structural property
- * that the previous design lacked.
+ * The caller supplies the watermark.  This keeps the structure free of any
+ * dependency on a ROB, a CPU or a thread model, and it means the buffer cannot
+ * disagree with the pipeline about what has retired: the pipeline is the single
+ * source of truth, and simply reports it.
+ *
+ * The sweep is what makes "no path can retain an entry forever" true, and it
+ * is not redundant with promote().  It exists because of a late fill:
+ *
+ *   A load can miss, then be squashed by a branch before its fill returns.  The
+ *   fill arrives anyway -- a cache's MSHRs service squashed targets, because
+ *   they have no notion of squashed instructions -- so capture() runs against a
+ *   sequence number that will never commit, and that the already-executed
+ *   discard could not have covered.  Such an entry is stranded: no promote()
+ *   will ever match a dead owner, and a later access to the same line refreshes
+ *   it while keeping that dead owner.  The line then never reaches the real
+ *   cache and every access to it re-fetches, without bound.  That is the
+ *   livelock which ended the first implementation, and it presented as a hang
+ *   rather than as a wrong answer.
+ *
+ *   The sweep reclaims it, because the watermark is monotonic and never
+ *   reuses sequence numbers, so it is guaranteed to pass the dead owner
+ *   eventually.  Recovery is therefore deferred rather than immediate: until
+ *   the watermark arrives, the line is not installed and will re-miss.  That
+ *   is a bounded cost, and it is the difference between bounded and unbounded.
+ *
+ * Note the directions differ and the two cannot be substituted:
+ *
+ *   retireThrough(w)  removes the OLDEST entries, owner <  w   (they retired)
+ *   discardFrom(s)    removes the NEWEST entries, owner >= s (they squashed)
+ *
+ * Passing a squash bound to retireThrough() discards the lines of loads that
+ * were about to commit.  Nothing crashes; the cache simply stops working.
  *
  * ---------------------------------------------------------------------------
+ * Ordering
+ * ---------------------------------------------------------------------------
+ * Entries are kept sorted by owner sequence number, ascending, and capture()
+ * inserts rather than appends.  Loads do not fill in program order -- an older
+ * load can miss and fill after a younger one already has -- so arrival order is
+ * not sequence order, and both retireThrough() and discardFrom() are single
+ * walks from one end of the queue.  The sort is load-bearing, and
+ * checkInvariants() verifies it.
+ *
  * Full-buffer policy
  * ---------------------------------------------------------------------------
  * SafeSpec forbids evicting one speculative line to admit another: that
@@ -252,14 +299,23 @@ class ShadowBuffer
     /**
      * Promote the line owned by a load, removing it from the buffer.
      *
-     * @param out  receives a copy of the line, if one was held
+     * The address is returned alongside the data because the caller needs it
+     * to install the line somewhere.  Asking for it separately would mean a
+     * second lookup, and two lookups can disagree if the buffer is mutated
+     * between them.
+     *
+     * @param ownerSeq  the owning load's sequence number
+     * @param addrOut   receives the block-aligned address
+     * @param out       receives a copy of the line contents
      * @return true if an entry was owned by ownerSeq and has been released.
      */
     bool
-    promote(std::uint64_t ownerSeq, std::vector<std::uint8_t> &out)
+    promote(std::uint64_t ownerSeq, std::uint64_t &addrOut,
+            std::vector<std::uint8_t> &out)
     {
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (it->valid && it->ownerSeq == ownerSeq) {
+                addrOut = it->addr;
                 out = it->data;
                 entries_.erase(it);
                 ++stats_.promotions;
@@ -312,6 +368,32 @@ class ShadowBuffer
             ++stats_.retires;
         }
         return released;
+    }
+
+    /**
+     * Discard every entry owned by a load at or above a sequence number.
+     *
+     * This is the squash path.  A squash removes the squashing instruction
+     * and everything younger from the pipeline, so the lines they fetched must
+     * be discarded: they were speculative and are now wrong.  Note the
+     * direction is the *opposite* of retireThrough() -- that one releases the
+     * oldest entries that have retired, this one throws away the newest that
+     * have been squashed -- and getting the two backwards is a subtle way to
+     * silently discard the lines of loads that are about to commit.
+     *
+     * @param squashSeq  loads at or above this sequence number are squashed
+     * @return how many entries were discarded.
+     */
+    std::size_t
+    discardFrom(std::uint64_t squashSeq)
+    {
+        std::size_t removed = 0;
+        while (!entries_.empty() && entries_.back().ownerSeq >= squashSeq) {
+            entries_.pop_back();
+            ++removed;
+            ++stats_.discards;
+        }
+        return removed;
     }
 
     /** Number of lines currently held. */
@@ -393,6 +475,7 @@ class ShadowBuffer
         std::size_t promotions = 0;
         std::size_t drops = 0;
         std::size_t retires = 0;
+        std::size_t discards = 0;
         std::size_t lookups = 0;
         std::size_t lookupHits = 0;
 

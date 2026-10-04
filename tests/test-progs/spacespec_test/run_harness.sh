@@ -46,7 +46,7 @@ fi
 mkdir -p "$BUILD" "$OUTDIR"
 
 # Build every test program.
-TESTS="store pressure atomic chain"
+TESTS="store pressure atomic chain deferred"
 echo "== building test programs =="
 for t in $TESTS; do
     if riscv64-linux-gnu-gcc -static -O2 -o "$BUILD/spacespec_$t" \

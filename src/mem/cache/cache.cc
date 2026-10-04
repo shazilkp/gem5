@@ -55,6 +55,7 @@
 #include "debug/Cache.hh"
 #include "debug/CacheTags.hh"
 #include "debug/CacheVerbose.hh"
+#include "debug/SpaceSpec.hh"
 #include "enums/Clusivity.hh"
 #include "mem/cache/cache_blk.hh"
 #include "mem/cache/compressors/base.hh"
@@ -962,6 +963,23 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
 PacketPtr
 Cache::evictBlock(CacheBlk *blk)
 {
+    // SpaceSpec: a block installed by promoting a line out of a ShadowCache
+    // was never announced to the crossbar, so the snoop filter does not know
+    // this cache holds it.  Announcing it now with a CleanEvict would trip
+    // the filter's "sender is not a holder" panic.
+    //
+    // Dropping it is correct: the line was fetched from memory and never
+    // written, so memory still holds the authoritative copy.  A store would
+    // break both of those assumptions, which is why access() forces such a
+    // block to be refetched rather than written in place.
+    if (blk->wasShadowInstalled()) {
+        DPRINTF(SpaceSpec,
+                "%s: dropping shadow-installed block without announcing it\n",
+                name());
+        invalidateBlock(blk);
+        return nullptr;
+    }
+
     PacketPtr pkt = (blk->isSet(CacheBlk::DirtyBit) || writebackClean) ?
         writebackBlk(blk) : cleanEvictBlk(blk);
 

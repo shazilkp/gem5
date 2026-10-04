@@ -53,11 +53,13 @@
 #include "debug/CacheRepl.hh"
 #include "debug/CacheVerbose.hh"
 #include "debug/HWPrefetch.hh"
+#include "debug/SpaceSpec.hh"
 #include "mem/cache/compressors/base.hh"
 #include "mem/cache/mshr.hh"
 #include "mem/cache/mshr_queue.hh"
 #include "mem/cache/prefetch/base.hh"
 #include "mem/cache/queue_entry.hh"
+#include "mem/cache/shadow_cache.hh"
 #include "mem/cache/tags/compressed_tags.hh"
 #include "mem/cache/tags/partitioning_policies/partition_manager.hh"
 #include "mem/cache/tags/super_blk.hh"
@@ -90,6 +92,7 @@ BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
       compressor(p.compressor),
       partitionManager(p.partitioning_manager),
       prefetcher(p.prefetcher),
+      shadowCache(p.shadow_cache),
       writeAllocator(p.write_allocator),
       writebackClean(p.writeback_clean),
       tempBlockWriteback(nullptr),
@@ -202,6 +205,18 @@ BaseCache::init()
         fatal("Cache ports on %s are not connected\n", name());
     cpuSidePort.sendRangeChange();
     forwardSnoops = cpuSidePort.isSnooping();
+
+    // SpaceSpec: register with the shadow so the pipeline can find us again
+    // to install promoted lines. Doing it here rather than in configuration
+    // means the two cannot disagree about which cache is guarded.
+    if (shadowCache) {
+        shadowCache->setCache(this);
+        if (shadowCache->buffer().lineSize() != blkSize) {
+            fatal("Cache %s has block size %u but its shadow cache is "
+                  "configured for %d-byte lines", name(), blkSize,
+                  (int)shadowCache->buffer().lineSize());
+        }
+    }
 }
 
 Port &
@@ -599,12 +614,75 @@ BaseCache::recvTimingResp(PacketPtr pkt)
 
     CacheBlk *blk = tags->findBlock({pkt->getAddr(), pkt->isSecure()});
 
+    // ---- SpaceSpec: divert a speculative fill into the shadow cache ----
+    //
+    // The pipeline tags speculative read misses on the Request.  Here, while
+    // the whole line is still in hand -- the response that reaches the CPU
+    // carries only the requested bytes -- it is copied into the shadow, and
+    // the fill is then declined by forcing allocate=false below.  That routes
+    // the line through gem5's existing tempBlock scratch path, so the MSHR is
+    // serviced exactly as normal, the load gets its data at unchanged
+    // latency, and the line simply never becomes resident here.
+    //
+    // Excluded, because diverting them would lose data:
+    //   - a write target (needsWritable) or whole-line write: the target's
+    //     data lives only in the packet and would be written into tempBlock
+    //     and discarded with it;
+    //   - any MSHR with a *deferred* target.  needsWritable() reports only the
+    //     active target list, so an MSHR whose targets are all reads but which
+    //     is also holding a waiting store still reports false.  Diverting it
+    //     is a store-loss bug: on the response, recvTimingResp() promotes the
+    //     deferred targets and re-sends the MSHR, which only works if the
+    //     block is now resident.  It is not, so the store is applied to scratch
+    //     storage and dropped.  This is silent -- the guest simply reads back
+    //     what it stored as the old value.
+    //   - a locked RMW, which needs the block to stay resident for the SC half;
+    //   - a line already resident here: overwriting it with the shadow copy
+    //     could replace newer data.
+    // Those fills install normally.  This is a real gap in the guarantee and
+    // is called out rather than papered over: such a line is by definition
+    // being written by an in-flight store, so it is not a secret-dependent
+    // line, but that argument is not proven.
+    const bool shadowFill = shadowCache && shadowCache->interceptEnabled() &&
+                            is_fill && !is_error &&
+                            pkt->req->isShadowFill() && pkt->isRead() &&
+                            pkt->hasData() &&
+                            !mshr->needsWritable() &&
+                            !mshr->hasDeferredTargets() &&
+                            !mshr->hasLockedRMWReadTarget() &&
+                            !mshr->wasWholeLineWrite &&
+                            inRange(pkt->getBlockAddr(blkSize)) &&
+                            !(blk && blk->isValid());
+
+    if (shadowFill) {
+        const Addr line_addr = pkt->getBlockAddr(blkSize);
+        // handleFill() asserts pkt->getSize() == blkSize for read fills, so
+        // the whole line is here.  Check anyway rather than memcpy-ing short.
+        if (pkt->getSize() != blkSize) {
+            panic("%s: shadow fill for %#x is %u bytes, expected %u",
+                  name(), line_addr, pkt->getSize(), blkSize);
+        }
+        // A refused capture (buffer full) is not an error and does not change
+        // what happens below: allocate stays false either way, so the line is
+        // simply not cached.  It only means this load will miss again later.
+        shadowCache->capture(pkt->req->shadowOwnerSeq(), line_addr,
+                             pkt->getConstPtr<uint8_t>(), blkSize);
+    }
+
     if (is_fill && !is_error) {
         DPRINTF(Cache, "Block for addr %#llx being updated in Cache\n",
                 pkt->getAddr());
 
-        const bool allocate = (writeAllocator && mshr->wasWholeLineWrite) ?
+        // If the shadow refused the line because it was full, the fill must
+        // still not be installed: installing it would put a speculative line
+        // in the cache, which is the one thing this mechanism forbids.  It is
+        // simply not cached at all in that case.
+        const bool divert = shadowFill && shadowCache->divertEnabled();
+        const bool allocate =
+            divert ? false :
+            (writeAllocator && mshr->wasWholeLineWrite) ?
             writeAllocator->allocate() : mshr->allocOnFill();
+
         blk = handleFill(pkt, blk, writebacks, allocate);
         assert(blk != nullptr);
         ppFill->notify(CacheAccessProbeArg(pkt, accessor));
@@ -668,7 +746,17 @@ BaseCache::recvTimingResp(PacketPtr pkt)
 
         // if we used temp block, check to see if its valid and then clear it
         if (blk == tempBlock && tempBlock->isValid()) {
-            evictBlock(blk, writebacks);
+            // SpaceSpec: a diverted fill never becomes resident, so there is
+            // nothing to give back -- the line lives in the shadow, not here.
+            // Evicting the temp block would emit a CleanEvict for a line this
+            // cache never held, wasting bandwidth and, because it enters the
+            // write queue, able to collide with a legitimate fill for the same
+            // line.  Just drop it.
+            if (shadowFill && shadowCache->divertEnabled()) {
+                tempBlock->invalidate();
+            } else {
+                evictBlock(blk, writebacks);
+            }
         }
     }
 
@@ -1301,6 +1389,40 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     Cycles tag_latency(0);
     blk = tags->accessBlock(pkt, tag_latency);
 
+    // SpaceSpec: a write reaching a line that is still held in the shadow
+    // makes that copy stale.  Drop it before the write can land, otherwise
+    // promoting it later would install pre-store data back over the store.
+    // This is the one rule that makes deferred promotion safe alongside
+    // stores.
+    if (shadowCache && shadowCache->storeHooksEnabled() &&
+        pkt->isWrite() && !pkt->isAtomicOp() &&
+        !pkt->isLLSC() && !pkt->isLockedRMW()) {
+        shadowCache->dropLine(pkt->getBlockAddr(blkSize));
+    }
+
+    // A block installed by shadow promotion is clean, was never announced to
+    // the crossbar, and is deliberately dropped silently on eviction.  A plain
+    // write would make it dirty, breaking both assumptions: a dirty block
+    // must be announced, and the snoop filter would reject the announcement.
+    //
+    // So drop the block here and let the write take the ordinary miss path.
+    // Nothing is lost by invalidating a clean line, and the write-allocate
+    // fill that follows arrives as a normal fill response, which is what
+    // tells the snoop filter this cache holds the line.  Atomics are excluded
+    // throughout: an LL/SC pair or an AMO needs a stable resident block, and
+    // invalidating one out from under it makes the SC fail forever, which
+    // livelocks the program rather than merely slowing it.
+    if (shadowCache && shadowCache->storeHooksEnabled() &&
+        pkt->isWrite() && !pkt->isAtomicOp() &&
+        !pkt->isLLSC() && !pkt->isLockedRMW() &&
+        pkt->cmd != MemCmd::SwapReq && blk && blk->wasShadowInstalled()) {
+        DPRINTF(SpaceSpec,
+                "%s: write to shadow-installed %#x, refetching\n", name(),
+                pkt->getBlockAddr(blkSize));
+        invalidateBlock(blk);
+        blk = nullptr;
+    }
+
     DPRINTF(Cache, "%s for %s %s\n", __func__, pkt->print(),
             blk ? "hit " + blk->print() : "miss");
 
@@ -1661,6 +1783,115 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
                       pkt->payloadDelay);
 
     return blk;
+}
+
+bool
+BaseCache::promoteFromShadow(Addr line_addr, const std::uint8_t *data)
+{
+    assert(shadowCache);
+    assert(data);
+
+    fatal_if((line_addr & (blkSize - 1)) != 0,
+             "%s: promoteFromShadow called with unaligned address %#x",
+             name(), line_addr);
+
+    if (!inRange(line_addr)) {
+        return false;
+    }
+
+    // Already resident: something installed it in the meantime (a store, or a
+    // fill that was not diverted). Leave the newer copy alone.
+    if (tags->findBlock({line_addr, /*is_secure=*/false})) {
+        DPRINTF(SpaceSpec,
+                "%s: not promoting %#x, already resident\n", name(),
+                line_addr);
+        return false;
+    }
+
+    // A fill for this line is already in flight; it will install the line
+    // through the ordinary path, which is strictly better than installing it
+    // here.
+    if (mshrQueue.findMatch(line_addr, /*is_secure=*/false)) {
+        DPRINTF(SpaceSpec,
+                "%s: not promoting %#x, a fill is in flight\n", name(),
+                line_addr);
+        return false;
+    }
+
+    // A writeback for this line is still queued.  handleFill() asserts that a
+    // fill never races a pending write to the same line, and rightly so: the
+    // writeback carries the newer contents and is about to make this line
+    // resident.  Promoting now would install older data over it, so decline.
+    // The line will be in the cache shortly, via the ordinary path.
+    if (writeBuffer.findMatch(line_addr, /*is_secure=*/false)) {
+        DPRINTF(SpaceSpec,
+                "%s: not promoting %#x, a writeback is pending\n", name(),
+                line_addr);
+        return false;
+    }
+
+    PacketList writebacks;
+
+    // Fabricate the packet a read fill from memory would have produced, so
+    // handleFill() installs the line through the same code and with the same
+    // resulting coherence state: readable, writable, and *not* dirty.
+    //
+    // Requestor 0 is used because this packet never leaves the cache and is
+    // never counted against a real requestor.
+    auto req = std::make_shared<Request>(line_addr, blkSize,
+                                         Request::PHYSICAL, 0);
+    auto pkt = new Packet(req, MemCmd::ReadResp);
+    pkt->allocate();
+    std::memcpy(pkt->getPtr<uint8_t>(), data, blkSize);
+
+    CacheBlk *blk = tags->findBlock({line_addr, pkt->isSecure()});
+    blk = handleFill(pkt, blk, writebacks, true);
+
+    const bool resident = (blk != tempBlock);
+
+    // Order matters, and it is the same order recvTimingResp() uses: evict
+    // first, so that anything the fill displaced lands in `writebacks`, and
+    // only then drain `writebacks` into the write buffer.
+    //
+    // Doing doWritebacks() first and evicting afterwards loses the writeback
+    // of a displaced dirty line -- the list is already drained, and nothing
+    // ever sends it.  The guest then reads back stale data, which surfaces
+    // thousands of instructions later as an unrelated fault deep in the
+    // program.  This only happens when the cache has no replaceable block, so
+    // it needs a working set large enough to fill the cache to provoke.
+    if (!resident && tempBlock->isValid())
+        evictBlock(blk, writebacks);
+
+    doWritebacks(writebacks, clockEdge(fillLatency));
+
+    delete pkt;
+
+    if (!resident) {
+        DPRINTF(SpaceSpec,
+                "%s: could not install promoted line %#x, no replaceable "
+                "block\n", name(), line_addr);
+        return false;
+    }
+
+    // handleFill() left the block as not-yet-ready until now + fillLatency,
+    // because it was written on the assumption that data would be arriving
+    // over the memory interface.  Here it has already arrived: the line is
+    // readable immediately.
+    //
+    // Skipping this is a correctness bug, not just a timing inaccuracy.  A
+    // younger load to the same line would be turned away by the tag stage as
+    // not-ready and sent to the shadow, which serves a hit -- and the shadow
+    // copy can be older than this one, because a store may have landed in the
+    // cache in between.  That would hand back stale data with no indication
+    // that anything was wrong.
+    blk->setWhenReady(clockEdge(Cycles(0)));
+
+    // Never announced to the crossbar, so evictBlock() must drop it silently
+    // rather than emit a CleanEvict the snoop filter would reject.
+    blk->setShadowInstalled();
+
+    DPRINTF(SpaceSpec, "%s: installed promoted line %#x\n", name(), line_addr);
+    return true;
 }
 
 CacheBlk*

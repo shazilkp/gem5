@@ -1009,6 +1009,17 @@ Commit::commitInsts()
 
                 changedROBNumEntries[tid] = true;
 
+                // ---- SpaceSpec: WFC promotion ----
+                //
+                // A load at the commit head is architecturally dead, so the
+                // line it fetched speculatively may now become resident in
+                // L1-D.  Anything younger is still speculative and stays in the
+                // shadow.  This is the only place a shadowed line ever
+                // reaches the real cache.
+                if (cpu->shadowCache && head_inst->isLoad()) {
+                    cpu->shadowCache->promote(head_inst->seqNum);
+                }
+
                 // Set the doneSeqNum to the youngest committed instruction.
                 toIEW->commitInfo[tid].doneSeqNum = head_inst->seqNum;
 
@@ -1096,6 +1107,32 @@ Commit::commitInsts()
                         head_inst->pcState(), tid ,head_inst->seqNum);
                 break;
             }
+        }
+        // ---- SpaceSpec: retirement watermark sweep ----
+        //
+        // Promotion above handles the ordinary case, but it cannot handle a
+        // fill that arrives *after* its owner has already been resolved.  A
+        // load can miss, be squashed by a branch before its fill returns, and
+        // the fill still completes: gem5's MSHRs have no notion of squashed
+        // targets, so serviceMSHRTargets() delivers it regardless.  That late
+        // fill is captured against a sequence number that will never commit and
+        // was never covered by the squash that already ran.  Left alone, the
+        // entry is stranded: it is owned by a dead load, so no promote() will
+        // ever match it, while a later access to the same line refreshes it and
+        // keeps the dead owner.  The line then never reaches L1 and every
+        // access to it re-fetches, without bound -- the livelock that ended the
+        // first implementation.
+        //
+        // Sweeping by the retirement watermark closes that: anything whose
+        // owner is older than what has committed is dead by definition, whether
+        // it committed, was squashed, or was squashed before its fill landed.
+        //
+        // This runs after the promotion above, so a line belonging to an
+        // instruction committed this cycle is installed before the sweep can
+        // reach it.  Entries the sweep does remove were redundant: a line
+        // already resident, or one whose owner committed without needing it.
+        if (cpu->shadowCache) {
+            cpu->shadowCache->retireThrough(lastCommitedSeqNum[tid] + 1);
         }
     }
 

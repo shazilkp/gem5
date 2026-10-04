@@ -408,6 +408,29 @@ class LSQUnit
 
     BaseMMU *getMMUPtr();
 
+    /**
+     * SpaceSpec (SafeSpec DAC'19): tag a request's L1-D packets so their fill
+     * is diverted into the shadow cache instead of being installed.
+     *
+     * Called by LSQRequest::sendPacketToCache(), which is the single point
+     * where every load packet leaves the CPU -- including the second packet of
+     * a split access and any re-send after a translation restart.
+     *
+     * It has to be here rather than in executeLoad().  initiateAcc() creates
+     * the Request *and sends the packet*, so tagging after it returns races
+     * against the fill coming back: some fills see the tag and some do not, and
+     * the mechanism engages nondeterministically.
+     *
+     * Every load is tagged, not only LVP-predicted ones: this is a cache
+     * hierarchy mechanism, and the LVP is just an additional source of
+     * speculation that happens to funnel through the same squash hook.
+     *
+     * No-op when no shadow cache is configured, when the interception
+     * bisection gate is off, or for stores.
+     */
+    void
+    applyShadowTag(LSQ::LSQRequest *req, std::uint64_t seq_num, bool is_load);
+
   private:
     /** Pointer to the CPU. */
     CPU *cpu;

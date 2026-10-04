@@ -48,6 +48,7 @@ from m5.objects.IndexingPolicies import *
 from m5.objects.IQUnit import *
 from m5.objects.LoadValuePredictionUnit import *
 from m5.objects.ReplacementPolicies import *
+from m5.objects.ShadowCache import ShadowCache
 from m5.objects.SMT import *
 from m5.params import *
 from m5.proxy import *
@@ -211,6 +212,18 @@ class BaseO3CPU(BaseCPU):
     loadValuePredictor = Param.LoadValuePredictionUnit(
         LoadValuePredictionUnit(),
         "Load Value Predictor (FLOP-paper model)",
+    )
+
+    # SpaceSpec (SafeSpec DAC'19). Set to a ShadowCache() to divert speculative
+    # L1-D fills into it, installing them only once their load commits.
+    # NULL disables the mechanism entirely.
+    #
+    # This must reference the SAME ShadowCache object as the CPU's data cache;
+    # the cache fills it and this releases from it. The config is responsible
+    # for wiring that up, because --param cannot instantiate SimObjects.
+    shadow_cache = Param.ShadowCache(
+        NULL,
+        "SpaceSpec shadow cache for the O3 CPU (NULL disables it).",
     )
 
     recvRespThrottling = Param.Bool(

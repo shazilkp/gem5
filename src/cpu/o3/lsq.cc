@@ -1302,6 +1302,7 @@ void
 LSQ::SingleDataRequest::sendPacketToCache()
 {
     assert(_numOutstandingPackets == 0);
+    lsqUnit()->applyShadowTag(this, _inst->seqNum, isLoad());
     if (lsqUnit()->trySendPacket(isLoad(), _packets.at(0)))
         _numOutstandingPackets = 1;
 }
@@ -1309,6 +1310,9 @@ LSQ::SingleDataRequest::sendPacketToCache()
 void
 LSQ::SplitDataRequest::sendPacketToCache()
 {
+    /* SpaceSpec: tag before sending -- see LSQUnit::applyShadowTag(). */
+    lsqUnit()->applyShadowTag(this, _inst->seqNum, isLoad());
+
     /* Try to send the packets. */
     while (numReceivedPackets + _numOutstandingPackets < _packets.size() &&
             lsqUnit()->trySendPacket(isLoad(),

@@ -48,6 +48,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 #include "base/addr_range.hh"
@@ -93,6 +94,7 @@ class Base;
 class MSHR;
 class MSHRQueue;
 class RequestPort;
+class ShadowCache;
 class QueueEntry;
 class WriteQueueEntry;
 struct BaseCacheParams;
@@ -364,6 +366,15 @@ class BaseCache : public ClockedObject
 
     /** Prefetcher */
     prefetch::Base *prefetcher;
+
+    /**
+     * SpaceSpec shadow cache, or nullptr when the mechanism is disabled.
+     *
+     * Shared with the CPU: this cache captures speculative fills into it and
+     * installs promoted lines back into itself; the pipeline releases from it
+     * at commit and on squash.
+     */
+    ShadowCache *shadowCache;
 
     /** To probe when a cache hit occurs */
     ProbePointArg<CacheAccessProbeArg> *ppHit;
@@ -1171,6 +1182,28 @@ class BaseCache : public ClockedObject
     }
 
     const AddrRangeList &getAddrRanges() const { return addrRanges; }
+
+    /**
+     * SpaceSpec: install a line that has been promoted out of the shadow
+     * cache now that its load has committed.
+     *
+     * The data is architecturally dead by the time it arrives here, so the
+     * install reuses the ordinary read-fill path and leaves the block
+     * readable, writable and *clean*.  That last part matters: pushing a
+     * writeback up from the CPU would mark it dirty, because
+     * BaseCache::access() sets DirtyBit on any writeback, which is wrong for a
+     * line nobody has written.
+     *
+     * The install deliberately does not go through the memory system.  A line
+     * that becomes resident without a fill response is invisible to the
+     * snoop filter, so the block is marked instead and Cache::evictBlock()
+     * drops it silently on eviction.
+     *
+     * @param lineAddr  block-aligned address of the line
+     * @param data      exactly blkSize bytes
+     * @return true if the line is resident here afterwards.
+     */
+    bool promoteFromShadow(Addr lineAddr, const std::uint8_t *data);
 
     MSHR *allocateMissBuffer(PacketPtr pkt, Tick time, bool sched_send = true)
     {

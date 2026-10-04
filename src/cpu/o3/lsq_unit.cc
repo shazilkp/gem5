@@ -52,6 +52,7 @@
 #include "debug/IEW.hh"
 #include "debug/LSQUnit.hh"
 #include "debug/LVP.hh"
+#include "debug/SpaceSpec.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
 
@@ -620,6 +621,14 @@ LSQUnit::executeLoad(const DynInstPtr &inst)
     }
 
     load_fault = inst->initiateAcc();
+
+    // SpaceSpec: the request is NOT tagged here.  initiateAcc() has already
+    // created the Request *and sent the packet* by the time it returns, so
+    // setting the flag afterwards is a race against the fill coming back --
+    // some fills observe the tag and some do not, which is to say the
+    // mechanism engages nondeterministically.  The tag is applied in
+    // LSQUnit::applyShadowTag(), which the request calls just before handing
+    // its packets to the cache.
 
     if (load_fault == NoFault && !inst->readMemAccPredicate()) {
         assert(inst->readPredicate());
@@ -1430,6 +1439,20 @@ LSQUnit::dumpInsts() const
 void LSQUnit::schedule(Event& ev, Tick when) { cpu->schedule(ev, when); }
 
 BaseMMU *LSQUnit::getMMUPtr() { return cpu->mmu; }
+
+void
+LSQUnit::applyShadowTag(LSQ::LSQRequest *req, std::uint64_t seq_num,
+                        bool is_load)
+{
+    if (!cpu->shadowCache || !cpu->shadowCache->interceptEnabled() ||
+        !is_load) {
+        return;
+    }
+
+    req->setShadowFill(seq_num);
+
+    DPRINTF(SpaceSpec, "tagged shadow fill for [sn:%llu]\n", seq_num);
+}
 
 unsigned int
 LSQUnit::cacheLineSize()

@@ -318,6 +318,21 @@ class MSHR : public QueueEntry, public Printable
     /** True if we need to get a writable copy of the block. */
     bool needsWritable() const { return targets.needsWritable; }
 
+    /**
+     * True if any target is waiting in the deferred list.
+     *
+     * A deferred target arrived while this MSHR's fill was already in flight,
+     * so it could not be given the writable block it needs.  It is *not*
+     * reflected in needsWritable(), which reports only the active target list.
+     *
+     * This matters to anything that declines to install a fill: when the
+     * response arrives, BaseCache::recvTimingResp() promotes the deferred
+     * targets and re-sends this MSHR, which only works if the block is now
+     * resident.  If it is not, a deferred store is written into scratch storage
+     * and silently lost.
+     */
+    bool hasDeferredTargets() const { return deferredTargets.size() > 0; }
+
     bool isCleaning() const {
         PacketPtr pkt = targets.front().pkt;
         return pkt->isClean();
