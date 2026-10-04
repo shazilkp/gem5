@@ -63,6 +63,12 @@ DebugFlag('MSHR')
 DebugFlag('HWPrefetchQueue')
 DebugFlag('PartitionPolicy')
 
+# SpaceSpec shadow buffer (Layer 0).  Header-only and deliberately free of
+# cache, pipeline and SimObject dependencies, so ownership and lifetime can be
+# unit tested without a simulator.  Built as a standalone GTest rather than
+# folded into a SimObject, which is the whole point of splitting it out.
+GTest('shadow_buffer.test', 'shadow_buffer.test.cc')
+
 # CacheTags is so outrageously verbose, printing the cache's entire tag
 # array on each timing access, that you should probably have to ask for
 # it explicitly even above and beyond CacheAll.
