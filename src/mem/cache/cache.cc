@@ -973,6 +973,16 @@ Cache::evictBlock(CacheBlk *blk)
     // break both of those assumptions, which is why access() forces such a
     // block to be refetched rather than written in place.
     if (blk->wasShadowInstalled()) {
+        // A dirty block here would mean the "always clean" invariant has been
+        // broken, and dropping it would lose the write silently.  A normal
+        // writeback is the lesser evil: it is at worst rejected by a snoop
+        // filter, which is a loud, debuggable failure, whereas a lost store is
+        // neither.  Reaching this is a bug, so say so.
+        panic_if(blk->isSet(CacheBlk::DirtyBit),
+                 "%s: shadow-installed block %#llx is dirty; the SpaceSpec "
+                 "invariant that promoted lines stay clean has been violated",
+                 name(), regenerateBlkAddr(blk));
+
         DPRINTF(SpaceSpec,
                 "%s: dropping shadow-installed block without announcing it\n",
                 name());
