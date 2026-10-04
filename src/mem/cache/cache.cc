@@ -968,26 +968,45 @@ Cache::evictBlock(CacheBlk *blk)
     // this cache holds it.  Announcing it now with a CleanEvict would trip
     // the filter's "sender is not a holder" panic.
     //
-    // Dropping it is correct: the line was fetched from memory and never
-    // written, so memory still holds the authoritative copy.  A store would
-    // break both of those assumptions, which is why access() forces such a
-    // block to be refetched rather than written in place.
+    // Dropping it is correct only while it is clean: the line was fetched from
+    // memory and never written, so memory still holds the authoritative copy.
     if (blk->wasShadowInstalled()) {
-        // A dirty block here would mean the "always clean" invariant has been
-        // broken, and dropping it would lose the write silently.  A normal
-        // writeback is the lesser evil: it is at worst rejected by a snoop
-        // filter, which is a loud, debuggable failure, whereas a lost store is
-        // neither.  Reaching this is a bug, so say so.
-        panic_if(blk->isSet(CacheBlk::DirtyBit),
-                 "%s: shadow-installed block %#llx is dirty; the SpaceSpec "
-                 "invariant that promoted lines stay clean has been violated",
-                 name(), regenerateBlkAddr(blk));
+        if (blk->isSet(CacheBlk::DirtyBit)) {
+            /*
+             * The "promoted lines stay clean" invariant does not hold.  It was
+             * believed to, and asserting it was right -- that assert is what
+             * found this -- but there are more ways to dirty a block than the
+             * store hook in access() covers.  Writes also arrive via the
+             * miss-queue target path, the snoop path, and the LL/SC path, none
+             * of which go through access().  Chasing each one is whack-a-mole:
+             * the cache has seven separate sites that set DirtyBit.
+             *
+             * So degrade instead of dying.  A dirty line must be written back
+             * or the write is lost, and lost writes are the one failure mode
+             * with no symptom at all.  Under no snoop filter -- the SE
+             * configuration -- an ordinary writeback is entirely correct and
+             * costs only bandwidth.  Under a snoop filter the announcement is
+             * wrong, but that configuration is not supported yet and will
+             * complain loudly rather than corrupt quietly.
+             *
+             * Counted, not fatal: a run that aborts tells you nothing about
+             * any other benchmark, and this needs to be visible in aggregate.
+             */
+            ++stats.spaceSpecDirtyPromoted;
+            warn_once("%s: a promoted line became dirty via a write path that "
+                      "bypasses BaseCache::access(). Falling back to a normal "
+                      "writeback; the write is preserved but the silent-drop "
+                      "optimisation is lost for this block. Counted as "
+                      "spaceSpecDirtyPromoted.", name());
 
-        DPRINTF(SpaceSpec,
-                "%s: dropping shadow-installed block without announcing it\n",
-                name());
-        invalidateBlock(blk);
-        return nullptr;
+            blk->clearShadowInstalled();
+        } else {
+            DPRINTF(SpaceSpec,
+                    "%s: dropping shadow-installed block without announcing it\n",
+                    name());
+            invalidateBlock(blk);
+            return nullptr;
+        }
     }
 
     PacketPtr pkt = (blk->isSet(CacheBlk::DirtyBit) || writebackClean) ?

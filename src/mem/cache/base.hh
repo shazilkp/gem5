@@ -1157,6 +1157,23 @@ class BaseCache : public ClockedObject
 
         /** Per-command statistics */
         std::vector<std::unique_ptr<CacheCmdStats>> cmd;
+
+        /**
+         * SpaceSpec: promoted lines that became dirty.
+         *
+         * A line installed by promoting out of a ShadowCache is never announced
+         * to the crossbar, so it is dropped silently on eviction -- which is
+         * only sound while it stays clean. This counts the occasions a write
+         * reached such a block by a path that does not go through
+         * BaseCache::access(), forcing a normal writeback instead.
+         *
+         * Non-zero is not a correctness failure without a snoop filter, but it
+         * does mean the silent-drop optimisation was lost that many times, and
+         * under a snoop filter it would be a genuine coherence problem. It is
+         * tracked rather than asserted so that a run continues and the
+         * frequency is visible across a whole benchmark suite.
+         */
+        statistics::Scalar spaceSpecDirtyPromoted;
     } stats;
 
     /** Registers probes. */

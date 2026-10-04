@@ -1295,6 +1295,27 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         // Modified state) even if we are a failed StoreCond so we
         // supply data to any snoops that have appended themselves to
         // this cache before knowing the store will fail.
+        //
+        // SpaceSpec: a block installed by shadow promotion is dropped silently
+        // on eviction, which is only sound while it is clean. Writes reach
+        // here from two directions that do NOT go through BaseCache::access()
+        // -- the miss-queue target path in serviceMSHRTargets() and the snoop
+        // path in handleSnoops() -- so the store hook in access() never sees
+        // them and the block stays marked while becoming dirty. Evicting it
+        // would then discard a dirty line and lose the write.
+        //
+        // Clearing the marker here makes the block fall back to an ordinary
+        // writeback, which preserves the data. Under a snoop filter that
+        // announcement is still wrong, but a wrong announcement is visible and
+        // a lost store is not, so this is the correct place to degrade.
+        if (blk->wasShadowInstalled()) {
+            DPRINTF(SpaceSpec,
+                    "%s: write (%s) to shadow-installed %#x via a path that "
+                    "bypasses access(); clearing the marker so the line is "
+                    "written back normally\n",
+                    name(), pkt->cmd.toString(), regenerateBlkAddr(blk));
+            blk->clearShadowInstalled();
+        }
         blk->setCoherenceBits(CacheBlk::DirtyBit);
         DPRINTF(CacheVerbose, "%s for %s (write)\n", __func__, pkt->print());
     } else if (pkt->isRead()) {
@@ -2567,6 +2588,10 @@ BaseCache::CacheStats::CacheStats(BaseCache &c)
              "number of data expansions"),
     ADD_STAT(dataContractions, statistics::units::Count::get(),
              "number of data contractions"),
+    ADD_STAT(spaceSpecDirtyPromoted, statistics::units::Count::get(),
+             "number of lines installed by SpaceSpec promotion that later "
+             "became dirty, forcing a normal writeback instead of a silent "
+             "drop"),
     cmd(MemCmd::NUM_MEM_CMDS)
 {
     for (int idx = 0; idx < MemCmd::NUM_MEM_CMDS; ++idx)
