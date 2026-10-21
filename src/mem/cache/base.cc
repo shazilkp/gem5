@@ -1389,6 +1389,21 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     Cycles tag_latency(0);
     blk = tags->accessBlock(pkt, tag_latency);
 
+
+        // SpaceSpec: do not satisfy a load-linked from a shadow-installed
+    // line. Refetch it through the normal coherence path so the LL/SC
+    // reservation is established on a normally tracked cache block.
+    if (shadowCache && shadowCache->storeHooksEnabled() &&
+        pkt->isLLSC() && pkt->isRead() &&
+        blk && blk->wasShadowInstalled()) {
+        shadowCache->dropLine(pkt->getBlockAddr(blkSize));
+        DPRINTF(SpaceSpec,
+                "%s: load-linked to shadow-installed %#x, refetching\n",
+                name(), pkt->getBlockAddr(blkSize));
+        invalidateBlock(blk);
+        blk = nullptr;
+    }
+
     // SpaceSpec: a write reaching a line that is still held in the shadow
     // makes that copy stale.  Drop it before the write can land, otherwise
     // promoting it later would install pre-store data back over the store.
@@ -1412,6 +1427,17 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     // throughout: an LL/SC pair or an AMO needs a stable resident block, and
     // invalidating one out from under it makes the SC fail forever, which
     // livelocks the program rather than merely slowing it.
+
+
+        if (blk && blk->wasShadowInstalled() && pkt->isWrite()) {
+        warn("%s: shadow-installed write addr=%#llx "
+             "atomic=%d llsc=%d lockedRMW=%d swap=%d",
+             name(), (unsigned long long)pkt->getAddr(),
+             pkt->isAtomicOp(), pkt->isLLSC(),
+             pkt->isLockedRMW(), pkt->cmd == MemCmd::SwapReq);
+    }
+
+
     if (shadowCache && shadowCache->storeHooksEnabled() &&
         pkt->isWrite() && !pkt->isAtomicOp() &&
         !pkt->isLLSC() && !pkt->isLockedRMW() &&

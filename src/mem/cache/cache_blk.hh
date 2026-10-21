@@ -227,6 +227,12 @@ class CacheBlk : public TaggedEntry
     setCoherenceBits(unsigned bits)
     {
         assert(isValid());
+
+        panic_if((bits & DirtyBit) && wasShadowInstalled(),
+                "SpaceSpec diagnostic: setting DirtyBit on "
+                "shadow-installed block, tag=%#llx, bits=%#x, "
+                "coherence_before=%#x",
+             getTag(), bits, coherence);
         coherence |= bits;
     }
 
