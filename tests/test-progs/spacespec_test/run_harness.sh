@@ -69,13 +69,18 @@ run_one() {
         >"$OUTDIR/$tag.console" 2>&1
     local rc=$?
     if [ $rc -eq 124 ]; then
-        echo "TIMEOUT"
+        # Report on stderr only.  This used to echo the reason to stdout,
+        # where the caller compared it against the other run's copy: two
+        # timeouts compared equal and were reported as PASS.  An empty
+        # stdout makes the caller take its explicit no-result failure path.
+        echo "  ${tag}: TIMEOUT after ${TIMEOUT}s" >&2
         return 1
     fi
     grep -E "^spacespec_[a-z]+ done" "$OUTDIR/$tag.console" 2>/dev/null
 }
 
 pass=0; fail=0
+failed_tests=" "
 echo
 echo "== output equivalence (baseline vs SpaceSpec) =="
 for t in $TESTS; do
@@ -84,7 +89,7 @@ for t in $TESTS; do
 
     if [ -z "$base" ] || [ -z "$space" ]; then
         printf "  %-10s FAIL   (no result: crash or timeout)\n" "$t"
-        fail=$((fail+1))
+        fail=$((fail+1)); failed_tests="$failed_tests$t "
     elif [ "$base" = "$space" ]; then
         printf "  %-10s PASS   %s\n" "$t" "$base"
         pass=$((pass+1))
@@ -92,14 +97,27 @@ for t in $TESTS; do
         printf "  %-10s MISMATCH\n" "$t"
         printf "      baseline: %s\n" "$base"
         printf "      spacespec: %s\n" "$space"
-        fail=$((fail+1))
+        fail=$((fail+1)); failed_tests="$failed_tests$t "
     fi
 done
 
 echo
 echo "== self-check (harness verifies its own expectations) =="
 for t in $TESTS; do
-    if grep -q "FAIL" "$OUTDIR/${t}_base.console" 2>/dev/null; then
+    # A test that never produced a result line cannot have passed its own
+    # self-check.  Grepping only for "FAIL" used to report "ok" for a run that
+    # timed out or crashed before printing anything, which is the same
+    # vacuous-pass failure as comparing two timeouts.
+    case "$failed_tests" in
+        *" $t "*)
+            printf "  %-10s skipped (already failed above)\n" "$t"
+            continue
+            ;;
+    esac
+    if ! grep -qE "^spacespec_[a-z]+ done" "$OUTDIR/${t}_base.console" 2>/dev/null; then
+        printf "  %-10s FAIL   (no result line printed)\n" "$t"
+        fail=$((fail+1))
+    elif grep -q "FAIL" "$OUTDIR/${t}_base.console" 2>/dev/null; then
         printf "  %-10s FAIL   (harness self-check failed)\n" "$t"
         fail=$((fail+1))
     else
