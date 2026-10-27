@@ -268,15 +268,21 @@ class CacheBlk : public TaggedEntry
      * SpaceSpec: was this block installed by promoting a line out of a
      * ShadowCache, rather than by a normal fill response?
      *
-     * Such a block is resident here but was never announced to the crossbar,
-     * so the snoop filter does not know this cache holds the line.  Sending a
-     * CleanEvict for it on eviction would trip the filter's "sender is not a
-     * holder" panic, so Cache::evictBlock() drops these blocks silently
-     * instead.
+     * It marks a block that is currently clean and can therefore be dropped
+     * without a writeback.  The refinements below are worth stating because
+     * the original rationale for this marker was wrong.
      *
-     * This is sound because the line was fetched from memory and never
-     * written, so memory still holds the authoritative copy.  A write breaks
-     * that assumption, which is why a store to such a block forces a refetch.
+     * The fill that fed the shadow still sent a request through the crossbar
+     * and received a response through it, and SnoopFilter::updateResponse()
+     * sets this cache's holder bit from that response.  The filter therefore
+     * *does* know this cache holds the line, even though the cache did not
+     * install it at fill time.  A CleanEvict or WritebackDirty for a promoted
+     * line is accepted, not rejected.
+     *
+     * The marker is now used only to keep a clean promoted line from being
+     * announced unnecessarily, and to catch a promoted line that was quietly
+     * made dirty.  A dirty promoted line cannot be dropped, so setDirty()
+     * clears the marker; from the first write on it is an ordinary block.
      */
     bool wasShadowInstalled() const { return _shadowInstalled; }
 
@@ -285,6 +291,21 @@ class CacheBlk : public TaggedEntry
 
     /** Clear the SpaceSpec promotion marker. */
     void clearShadowInstalled() { _shadowInstalled = false; }
+
+    /**
+     * Mark the block dirty.
+     *
+     * A dirty block must be written back, so it can no longer be treated as a
+     * clean promoted line.  Clearing the marker here is what keeps the
+     * "promoted lines stay clean" invariant true: every path that dirties a
+     * block -- a plain store, a swap/atomic, a store-conditional, or a
+     * cache-to-cache fill -- goes through this function.
+     */
+    void setDirty()
+    {
+        clearShadowInstalled();
+        setCoherenceBits(DirtyBit);
+    }
 
     /**
      * Get tick at which block's data will be available for access.

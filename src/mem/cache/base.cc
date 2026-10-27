@@ -979,7 +979,7 @@ BaseCache::cmpAndSwap(CacheBlk *blk, PacketPtr pkt)
 
     if (overwrite_mem) {
         std::memcpy(blk_data, &overwrite_val, pkt->getSize());
-        blk->setCoherenceBits(CacheBlk::DirtyBit);
+        blk->setDirty();
 
         if (ppDataUpdate->hasListeners()) {
             data_update.newData = std::vector<uint64_t>(blk->data,
@@ -1277,7 +1277,7 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
             }
 
             // set block status to dirty
-            blk->setCoherenceBits(CacheBlk::DirtyBit);
+            blk->setDirty();
         } else {
             cmpAndSwap(blk, pkt);
         }
@@ -1298,25 +1298,18 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         //
         // SpaceSpec: a block installed by shadow promotion is dropped silently
         // on eviction, which is only sound while it is clean. Writes reach
-        // here from two directions that do NOT go through BaseCache::access()
-        // -- the miss-queue target path in serviceMSHRTargets() and the snoop
-        // path in handleSnoops() -- so the store hook in access() never sees
-        // them and the block stays marked while becoming dirty. Evicting it
-        // would then discard a dirty line and lose the write.
+        // here from directions that do NOT go through BaseCache::access() --
+        // the miss-queue target path in serviceMSHRTargets(), the snoop path
+        // in handleSnoops(), and LL/SC and atomics -- so the store hook in
+        // access() never sees them and the block stays marked while becoming
+        // dirty. Evicting it would then discard a dirty line and lose the
+        // write.
         //
-        // Clearing the marker here makes the block fall back to an ordinary
-        // writeback, which preserves the data. Under a snoop filter that
-        // announcement is still wrong, but a wrong announcement is visible and
-        // a lost store is not, so this is the correct place to degrade.
-        if (blk->wasShadowInstalled()) {
-            DPRINTF(SpaceSpec,
-                    "%s: write (%s) to shadow-installed %#x via a path that "
-                    "bypasses access(); clearing the marker so the line is "
-                    "written back normally\n",
-                    name(), pkt->cmd.toString(), regenerateBlkAddr(blk));
-            blk->clearShadowInstalled();
-        }
-        blk->setCoherenceBits(CacheBlk::DirtyBit);
+        // setDirty() clears the marker, so the block falls back to an ordinary
+        // writeback, which preserves the data. Doing it at the transition
+        // rather than at eviction means there is no window in which a dirty
+        // block is still marked as silently droppable.
+        blk->setDirty();
         DPRINTF(CacheVerbose, "%s for %s (write)\n", __func__, pkt->print());
     } else if (pkt->isRead()) {
         if (pkt->isLLSC()) {
@@ -1558,7 +1551,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         // and leave it as is for a clean writeback
         if (pkt->cmd == MemCmd::WritebackDirty) {
             // TODO: the coherent cache can assert that the dirty bit is set
-            blk->setCoherenceBits(CacheBlk::DirtyBit);
+            blk->setDirty();
         }
         // if the packet does not have sharers, it is passing
         // writable, and we got the writeback in Modified or Exclusive
@@ -1639,7 +1632,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         assert(blk);
         // TODO: the coherent cache can assert that the dirty bit is set
         if (!pkt->writeThrough()) {
-            blk->setCoherenceBits(CacheBlk::DirtyBit);
+            blk->setDirty();
         }
         // nothing else to do; writeback doesn't expect response
         assert(!pkt->needsResponse());
@@ -1779,7 +1772,7 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
         if (pkt->cacheResponding()) {
             // we got the block in Modified state, and invalidated the
             // owners copy
-            blk->setCoherenceBits(CacheBlk::DirtyBit);
+            blk->setDirty();
 
             gem5_assert(!isReadOnly, "Should never see dirty snoop response "
                         "in read-only cache %s\n", name());

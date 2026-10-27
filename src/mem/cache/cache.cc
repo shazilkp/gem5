@@ -763,7 +763,7 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
                     // between the PrefetchExReq and the expected WriteReq, we
                     // proactively mark the block as Dirty.
                     assert(blk);
-                    blk->setCoherenceBits(CacheBlk::DirtyBit);
+                    blk->setDirty();
 
                     panic_if(isReadOnly, "Prefetch exclusive requests from "
                             "read-only cache %s\n", name());
