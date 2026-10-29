@@ -325,6 +325,46 @@ class ShadowBuffer
         return false;
     }
 
+    /** Does any entry still belong to this owner? */
+    bool
+    hasOwner(std::uint64_t ownerSeq) const
+    {
+        for (const auto &e : entries_) {
+            if (e.valid && e.ownerSeq == ownerSeq)
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Promote every line owned by a load, removing them all from the buffer.
+     *
+     * A split (unaligned) access produces one capture per cache line, and all
+     * of them share the owning sequence number.  Releasing only the first --
+     * which is what a single-entry promote() does -- leaves the rest to be
+     * swept later without ever being installed, so the second line of every
+     * split load would never reach the cache.
+     *
+     * Returning the whole set makes "release all of the owner's lines" the
+     * only shape the caller can implement; hasOwner() then lets it assert that
+     * nothing was left behind.
+     */
+    std::vector<ShadowEntry>
+    promoteAll(std::uint64_t ownerSeq)
+    {
+        std::vector<ShadowEntry> promoted;
+        for (auto it = entries_.begin(); it != entries_.end();) {
+            if (it->valid && it->ownerSeq == ownerSeq) {
+                promoted.push_back(*it);
+                ++stats_.promotions;
+                it = entries_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return promoted;
+    }
+
     /**
      * Drop a line outright, e.g. because a store reached it.
      *

@@ -142,9 +142,11 @@ ShadowCache::promote(std::uint64_t ownerSeq)
         return false;
     }
 
-    std::uint64_t addr = 0;
-    std::vector<std::uint8_t> data;
-    if (!buffer_.promote(ownerSeq, addr, data)) {
+    // A split (unaligned) load owns one entry per cache line, all sharing the
+    // load's sequence number.  Releasing a single entry would leave the other
+    // line to be swept without ever being installed, so promote the whole set.
+    const auto promoted = buffer_.promoteAll(ownerSeq);
+    if (promoted.empty()) {
         // Benign: not speculative, the capture was refused because the buffer
         // was full, or a store dropped it. Nothing was consumed.
         DPRINTF(SpaceSpec,
@@ -152,16 +154,24 @@ ShadowCache::promote(std::uint64_t ownerSeq)
         return false;
     }
 
-    ++stats.promotions;
-    DPRINTF(SpaceSpec,
-            "%s: promoting addr %#x for [sn:%llu]\n", name(), addr, ownerSeq);
+    for (const auto &entry : promoted) {
+        ++stats.promotions;
+        DPRINTF(SpaceSpec,
+                "%s: promoting addr %#x for [sn:%llu]\n", name(), entry.addr,
+                ownerSeq);
 
-    if (cache_) {
-        cache_->promoteFromShadow(addr, data.data());
-    } else {
-        warn_once("%s: no cache registered; promoted line for [sn:%llu] "
-                  "discarded", name(), ownerSeq);
+        if (cache_) {
+            cache_->promoteFromShadow(entry.addr, entry.data.data());
+        } else {
+            warn_once("%s: no cache registered; promoted line for [sn:%llu] "
+                      "discarded", name(), ownerSeq);
+        }
     }
+
+    // The loop above is the entire fix for split loads; if it ever regresses,
+    // fail here rather than silently leaving a line in the shadow to be swept.
+    assert(!buffer_.hasOwner(ownerSeq));
+
     return true;
 }
 

@@ -550,6 +550,77 @@ TEST(ShadowBufferTest, PromoteConsumesSharedLineExactlyOnce)
         << "promoting a non-owner must not succeed";
 }
 
+// A split (unaligned) load captures one entry per cache line, all with the
+// same owner.  Releasing only the first left the second to be swept without
+// ever being installed -- every split load silently lost a line.
+TEST(ShadowBufferTest, PromoteAllReleasesEveryLineOfASplitLoad)
+{
+    ShadowBuffer buf(8, kLine);
+    const std::uint64_t owner = 77;
+    auto first = makeLine(0xA1);
+    auto second = makeLine(0xB2);
+
+    ASSERT_EQ(buf.capture(owner, lineAddr(4), first.data()),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(owner, lineAddr(5), second.data()),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.size(), 2u);
+    ASSERT_TRUE(buf.hasOwner(owner));
+
+    const auto promoted = buf.promoteAll(owner);
+
+    ASSERT_EQ(promoted.size(), 2u) << "both lines of a split load must be "
+                                     "released together";
+    EXPECT_TRUE(buf.empty());
+    EXPECT_FALSE(buf.hasOwner(owner));
+    EXPECT_EQ(buf.stats().promotions, 2u);
+
+    // Both addresses, with their own contents.  Order is deliberately not
+    // asserted: equal-owner entries are ordered newest-first by capture(), and
+    // for a split load the release order is irrelevant.
+    bool saw_first = false;
+    bool saw_second = false;
+    for (const auto &e : promoted) {
+        if (e.addr == lineAddr(4)) {
+            saw_first = true;
+            EXPECT_EQ(e.data, first);
+        } else if (e.addr == lineAddr(5)) {
+            saw_second = true;
+            EXPECT_EQ(e.data, second);
+        }
+    }
+    EXPECT_TRUE(saw_first);
+    EXPECT_TRUE(saw_second);
+}
+
+TEST(ShadowBufferTest, PromoteAllLeavesOtherOwnersAlone)
+{
+    ShadowBuffer buf(8, kLine);
+    auto a = makeLine(0x11);
+    auto b = makeLine(0x22);
+    ASSERT_EQ(buf.capture(10, lineAddr(0), a.data()), CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(20, lineAddr(1), b.data()), CaptureResult::Accepted);
+
+    const auto promoted = buf.promoteAll(10);
+
+    ASSERT_EQ(promoted.size(), 1u);
+    EXPECT_FALSE(buf.hasOwner(10));
+    EXPECT_TRUE(buf.hasOwner(20));
+    EXPECT_TRUE(buf.holds(lineAddr(1)));
+    EXPECT_EQ(buf.size(), 1u);
+}
+
+TEST(ShadowBufferTest, PromoteAllForUnknownOwnerFindsNothing)
+{
+    ShadowBuffer buf(4, kLine);
+    auto data = makeLine(0x33);
+    ASSERT_EQ(buf.capture(10, lineAddr(0), data.data()),
+              CaptureResult::Accepted);
+
+    EXPECT_TRUE(buf.promoteAll(99).empty());
+    EXPECT_EQ(buf.size(), 1u) << "a failed promoteAll must not consume entries";
+}
+
 // ---------------------------------------------------------------------------
 // Store interaction
 // ---------------------------------------------------------------------------
