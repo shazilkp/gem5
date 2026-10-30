@@ -72,7 +72,8 @@ class ShadowCache : public SimObject
      *         must not install it.
      */
     bool capture(std::uint64_t ownerSeq, std::uint64_t addr,
-                 const std::uint8_t *data, std::size_t len);
+                 const std::uint8_t *data, std::size_t len,
+                 std::uint32_t tid = 0);
 
     /**
      * Serve a line that is currently held.
@@ -142,7 +143,8 @@ class ShadowCache : public SimObject
      *                   so the violating load's own entry is covered here.
      * @return how many entries were discarded.
      */
-    std::size_t discardFrom(std::uint64_t squashSeq);
+    std::size_t discardFrom(std::uint64_t squashSeq,
+                            std::uint32_t tid = 0);
 
     /**
      * Release every entry whose owner has passed the retirement watermark.
@@ -154,7 +156,8 @@ class ShadowCache : public SimObject
      *
      * @param watermark  loads below this sequence number have committed.
      */
-    std::size_t retireThrough(std::uint64_t watermark);
+    std::size_t retireThrough(std::uint64_t watermark,
+                              std::uint32_t tid = 0);
 
     // ---------------------------------------------------------------- //
     //  Bisection gates                                                  //

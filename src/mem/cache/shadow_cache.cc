@@ -89,7 +89,8 @@ ShadowCache::ShadowStats::ShadowStats(ShadowCache *sc)
 
 bool
 ShadowCache::capture(std::uint64_t ownerSeq, std::uint64_t addr,
-                     const std::uint8_t *data, std::size_t len)
+                     const std::uint8_t *data, std::size_t len,
+                     std::uint32_t tid)
 {
     const std::size_t line = buffer_.lineSize();
     // The cache hands us a whole line. Anything else means the interception
@@ -98,7 +99,7 @@ ShadowCache::capture(std::uint64_t ownerSeq, std::uint64_t addr,
     fatal_if(len != line,
              "ShadowCache::capture: %d bytes for a %d-byte line", len, line);
 
-    const CaptureResult r = buffer_.capture(ownerSeq, addr, data);
+    const CaptureResult r = buffer_.capture(ownerSeq, addr, data, tid);
 
     const auto &s = buffer_.stats();
     stats.captures = s.captures;
@@ -215,9 +216,9 @@ ShadowCache::dropLine(std::uint64_t addr)
 }
 
 std::size_t
-ShadowCache::discardFrom(std::uint64_t squashSeq)
+ShadowCache::discardFrom(std::uint64_t squashSeq, std::uint32_t tid)
 {
-    const std::size_t n = buffer_.discardFrom(squashSeq);
+    const std::size_t n = buffer_.discardFrom(squashSeq, tid);
     stats.squashes = buffer_.stats().discards;
     if (n) {
         DPRINTF(SpaceSpec,
@@ -228,9 +229,9 @@ ShadowCache::discardFrom(std::uint64_t squashSeq)
 }
 
 std::size_t
-ShadowCache::retireThrough(std::uint64_t watermark)
+ShadowCache::retireThrough(std::uint64_t watermark, std::uint32_t tid)
 {
-    return buffer_.retireThrough(watermark);
+    return buffer_.retireThrough(watermark, tid);
 }
 
 } // namespace gem5

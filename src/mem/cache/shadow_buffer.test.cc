@@ -339,6 +339,80 @@ TEST(ShadowBufferTest, RetireAndDiscardAreComplementary)
     EXPECT_TRUE(buf.checkInvariants());
 }
 
+// ---------------------------------------------------------------------------
+// SMT: sequence numbers are global, so release must be per-thread
+// ---------------------------------------------------------------------------
+
+// A thread's retirement watermark can be above another thread's live owner.
+// A global sweep would delete the other thread's in-flight entries.
+TEST(ShadowBufferTest, RetireOnOneThreadLeavesOtherThreadsEntries)
+{
+    ShadowBuffer buf(8, kLine);
+    auto a = makeLine(0x01);
+    auto b = makeLine(0x02);
+
+    // Deliberately interleaved global sequence numbers:
+    //   tid 0: 10, 300        tid 1: 100, 200
+    ASSERT_EQ(buf.capture(10, lineAddr(0), a.data(), 0),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(100, lineAddr(1), b.data(), 1),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(200, lineAddr(2), b.data(), 1),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(300, lineAddr(3), a.data(), 0),
+              CaptureResult::Accepted);
+
+    // Thread 0 retires through 150.  Only its owner-10 entry may go; a global
+    // front sweep would also take thread 1's owner-100 entry.
+    EXPECT_EQ(buf.retireThrough(150, 0), 1u);
+    EXPECT_FALSE(buf.hasOwner(10));
+    EXPECT_TRUE(buf.hasOwner(100));
+    EXPECT_TRUE(buf.hasOwner(200));
+    EXPECT_TRUE(buf.hasOwner(300));
+}
+
+TEST(ShadowBufferTest, SquashOnOneThreadLeavesOtherThreadsEntries)
+{
+    ShadowBuffer buf(8, kLine);
+    auto a = makeLine(0x11);
+    auto b = makeLine(0x22);
+
+    ASSERT_EQ(buf.capture(100, lineAddr(0), a.data(), 0),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(200, lineAddr(1), b.data(), 1),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(300, lineAddr(2), b.data(), 1),
+              CaptureResult::Accepted);
+    ASSERT_EQ(buf.capture(400, lineAddr(3), a.data(), 0),
+              CaptureResult::Accepted);
+
+    // Thread 1 squashes from 250: its owner-300 entry goes.  Thread 0's 400 is
+    // also >= 250 but belongs to another thread and must stay.
+    EXPECT_EQ(buf.discardFrom(250, 1), 1u);
+    EXPECT_TRUE(buf.hasOwner(100));
+    EXPECT_TRUE(buf.hasOwner(200));
+    EXPECT_FALSE(buf.hasOwner(300));
+    EXPECT_TRUE(buf.hasOwner(400));
+}
+
+// A refresh keeps the ORIGINAL owner, including its thread.  Re-keying to the
+// newer load would make a later sweep miss the entry.
+TEST(ShadowBufferTest, RefreshKeepsOriginalOwnerThread)
+{
+    ShadowBuffer buf(4, kLine);
+    auto data = makeLine(0x33);
+
+    ASSERT_EQ(buf.capture(10, lineAddr(0), data.data(), 0),
+              CaptureResult::Accepted);
+    // A younger load on thread 1 re-fetches the same line.
+    ASSERT_EQ(buf.capture(200, lineAddr(0), data.data(), 1),
+              CaptureResult::Accepted);
+
+    // Owner is still thread 0 / 10, so thread 0's watermark releases it.
+    EXPECT_EQ(buf.retireThrough(50, 0), 1u);
+    EXPECT_FALSE(buf.holds(lineAddr(0)));
+}
+
 // A squashed owner's line must never be promotable. If it were, a discarded
 // speculative line could still reach the real cache, which is precisely the
 // property the mechanism exists to guarantee.

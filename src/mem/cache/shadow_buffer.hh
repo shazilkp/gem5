@@ -148,6 +148,16 @@ struct ShadowEntry
     /** Owner: the oldest captured, not-yet-retired load using this line. */
     std::uint64_t ownerSeq = 0;
 
+    /**
+     * Thread that owns the entry.
+     *
+     * Sequence numbers are global across threads, so a per-thread retirement
+     * watermark or squash bound must be filtered by thread: thread 1's
+     * watermark can be above thread 0's live owner, and applying it globally
+     * would delete thread 0's in-flight lines.
+     */
+    std::uint32_t tid = 0;
+
     /** Line contents. */
     std::vector<std::uint8_t> data;
 
@@ -222,7 +232,7 @@ class ShadowBuffer
      */
     CaptureResult
     capture(std::uint64_t ownerSeq, std::uint64_t addr,
-            const std::uint8_t *src)
+            const std::uint8_t *src, std::uint32_t tid = 0)
     {
         ++stats_.captures;
 
@@ -243,6 +253,7 @@ class ShadowBuffer
         ShadowEntry e;
         e.addr = addr;
         e.ownerSeq = ownerSeq;
+        e.tid = tid;
         e.data.assign(src, src + lineSize_);
         e.valid = true;
 
@@ -399,13 +410,22 @@ class ShadowBuffer
      * one is always newer, hence also live.
      */
     std::size_t
-    retireThrough(std::uint64_t watermark)
+    retireThrough(std::uint64_t watermark, std::uint32_t tid = 0)
     {
         std::size_t released = 0;
-        while (!entries_.empty() && entries_.front().ownerSeq < watermark) {
-            entries_.pop_front();
-            ++released;
-            ++stats_.retires;
+        for (auto it = entries_.begin();
+             it != entries_.end() && it->ownerSeq < watermark;) {
+            if (it->tid == tid) {
+                it = entries_.erase(it);
+                ++released;
+                ++stats_.retires;
+            } else {
+                // Another thread's live entry.  It stays, and because the
+                // queue is globally sorted by owner sequence, every later
+                // entry is also at or above this watermark's reach only if
+                // its owner is; keep walking until the bound is reached.
+                ++it;
+            }
         }
         return released;
     }
@@ -425,13 +445,17 @@ class ShadowBuffer
      * @return how many entries were discarded.
      */
     std::size_t
-    discardFrom(std::uint64_t squashSeq)
+    discardFrom(std::uint64_t squashSeq, std::uint32_t tid = 0)
     {
         std::size_t removed = 0;
-        while (!entries_.empty() && entries_.back().ownerSeq >= squashSeq) {
-            entries_.pop_back();
-            ++removed;
-            ++stats_.discards;
+        for (auto it = entries_.begin(); it != entries_.end();) {
+            if (it->tid == tid && it->ownerSeq >= squashSeq) {
+                it = entries_.erase(it);
+                ++removed;
+                ++stats_.discards;
+            } else {
+                ++it;
+            }
         }
         return removed;
     }

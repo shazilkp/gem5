@@ -666,7 +666,8 @@ BaseCache::recvTimingResp(PacketPtr pkt)
         // what happens below: allocate stays false either way, so the line is
         // simply not cached.  It only means this load will miss again later.
         shadowCache->capture(pkt->req->shadowOwnerSeq(), line_addr,
-                             pkt->getConstPtr<uint8_t>(), blkSize);
+                             pkt->getConstPtr<uint8_t>(), blkSize,
+                             pkt->req->contextId());
     }
 
     if (is_fill && !is_error) {

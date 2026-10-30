@@ -465,7 +465,7 @@ ROB::squash(InstSeqNum squash_num, ThreadID tid)
     // mispredictions, LVP mismatches, memory-order violations, traps and TC
     // squashes are all covered by one place.
     if (cpu->shadowCache) {
-        cpu->shadowCache->discardFrom(squash_num);
+        cpu->shadowCache->discardFrom(squash_num, tid);
     }
 
     if (isEmpty(tid)) {
