@@ -84,6 +84,17 @@ class ShadowCache : public SimObject
     bool lookup(std::uint64_t addr, unsigned offset,
                 std::uint8_t *dst, std::size_t len);
 
+    /**
+     * Record that an L1-D read missed a line the shadow still holds.
+     *
+     * This is the Layer 3 decision counter: the number of misses that would
+     * have been hits if the line had been installed.  It does NOT serve the
+     * access; it only measures the opportunity that shadow-hit service would
+     * recover.  A linear scan is fine for measurement; a production version
+     * would need a tag lookup.
+     */
+    bool missWouldHit(std::uint64_t addr);
+
     // ---------------------------------------------------------------- //
     //  Release (called by commit and the ROB)                           //
     // ---------------------------------------------------------------- //
@@ -243,6 +254,8 @@ class ShadowCache : public SimObject
         statistics::Scalar lookupHits;
         /** Loads that found nothing in the shadow. */
         statistics::Scalar lookupMisses;
+        /** L1-D read misses on a line still held in the shadow. */
+        statistics::Scalar missesHittingShadow;
         /** Lines installed into the cache at commit. */
         statistics::Scalar promotions;
         /** Lines dropped because a store reached them. */

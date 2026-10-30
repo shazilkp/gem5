@@ -70,6 +70,8 @@ ShadowCache::ShadowStats::ShadowStats(ShadowCache *sc)
                "Loads served from the shadow cache"),
       ADD_STAT(lookupMisses, statistics::units::Count::get(),
                "Loads that found nothing in the shadow cache"),
+      ADD_STAT(missesHittingShadow, statistics::units::Count::get(),
+               "L1-D read misses on a line still held in the shadow"),
       ADD_STAT(promotions, statistics::units::Count::get(),
                "Lines installed into the cache at commit"),
       ADD_STAT(storeDrops, statistics::units::Count::get(),
@@ -129,6 +131,16 @@ ShadowCache::lookup(std::uint64_t addr, unsigned offset,
         DPRINTF(SpaceSpec, "%s: served addr %#x from shadow\n", name(), addr);
     }
     return hit;
+}
+
+bool
+ShadowCache::missWouldHit(std::uint64_t addr)
+{
+    if (!buffer_.holds(addr)) {
+        return false;
+    }
+    ++stats.missesHittingShadow;
+    return true;
 }
 
 // ------------------------------------------------------------------------- //

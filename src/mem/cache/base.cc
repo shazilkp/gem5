@@ -1403,6 +1403,15 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     Cycles tag_latency(0);
     blk = tags->accessBlock(pkt, tag_latency);
 
+    // SpaceSpec: Layer 3 decision counter.  A read that misses here while the
+    // line is still held in the shadow is a miss that shadow-hit service could
+    // have avoided.  Count it; do not serve it yet.
+    if (shadowCache && shadowCache->interceptEnabled() &&
+        pkt->isRead() && !pkt->isWrite() &&
+        (!blk || !blk->isValid())) {
+        shadowCache->missWouldHit(pkt->getBlockAddr(blkSize));
+    }
+
     // SpaceSpec: a write reaching a line that is still held in the shadow
     // makes that copy stale.  Drop it before the write can land, otherwise
     // promoting it later would install pre-store data back over the store.
