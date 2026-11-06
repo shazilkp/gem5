@@ -696,6 +696,53 @@ TEST(ShadowBufferTest, PromoteAllForUnknownOwnerFindsNothing)
 }
 
 // ---------------------------------------------------------------------------
+// Serving a held line: only a younger same-thread consumer
+// ---------------------------------------------------------------------------
+
+TEST(ShadowBufferTest, ServableOnlyToYoungerSameThreadConsumer)
+{
+    ShadowBuffer buf(4, kLine);
+    auto data = makeLine(0xA5);
+    ASSERT_EQ(buf.capture(100, lineAddr(0), data.data(), /*tid=*/0),
+              CaptureResult::Accepted);
+
+    EXPECT_TRUE(buf.isServable(lineAddr(0), 120, 0))
+        << "a younger consumer in the same thread is safe";
+    EXPECT_FALSE(buf.isServable(lineAddr(0), 80, 0))
+        << "an older consumer could survive the owner's squash";
+    EXPECT_FALSE(buf.isServable(lineAddr(0), 120, 1))
+        << "another thread is not ordered by this thread's squash";
+    EXPECT_FALSE(buf.isServable(lineAddr(0), 100, 0))
+        << "the owner itself has already been served by the fill";
+    EXPECT_FALSE(buf.isServable(lineAddr(1), 120, 0))
+        << "a line that is not held must not be served";
+}
+
+TEST(ShadowBufferTest, LineForConsumerCopiesOnlyWhenServable)
+{
+    ShadowBuffer buf(4, kLine);
+    auto data = makeLine(0x5A);
+    ASSERT_EQ(buf.capture(100, lineAddr(0), data.data(), 0),
+              CaptureResult::Accepted);
+
+    std::vector<std::uint8_t> out;
+    EXPECT_TRUE(buf.lineForConsumer(lineAddr(0), 120, 0, out));
+    EXPECT_EQ(out, data);
+
+    out.clear();
+    EXPECT_FALSE(buf.lineForConsumer(lineAddr(0), 80, 0, out))
+        << "older consumer must not be served";
+    EXPECT_TRUE(out.empty());
+
+    EXPECT_FALSE(buf.lineForConsumer(lineAddr(0), 120, 1, out))
+        << "another thread must not be served";
+    EXPECT_TRUE(out.empty());
+
+    // Serving does not consume the entry.
+    EXPECT_TRUE(buf.holds(lineAddr(0)));
+}
+
+// ---------------------------------------------------------------------------
 // Store interaction
 // ---------------------------------------------------------------------------
 

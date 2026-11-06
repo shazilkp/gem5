@@ -86,15 +86,26 @@ class ShadowCache : public SimObject
                 std::uint8_t *dst, std::size_t len);
 
     /**
+     * Copy a held line for a consumer that is allowed to read it.
+     *
+     * A consumer is allowed only if it is in the same thread and strictly
+     * younger than the entry's owner; see ShadowBuffer::isServable().  This
+     * is what makes a fast shadow hit safe: if the owner is squashed, every
+     * younger consumer is squashed with it.
+     */
+    bool lineForConsumer(std::uint64_t addr, std::uint64_t consumerSeq,
+                         std::uint32_t tid,
+                         std::vector<std::uint8_t> &out);
+
+    /**
      * Record that an L1-D read missed a line the shadow still holds.
      *
-     * This is the Layer 3 decision counter: the number of misses that would
-     * have been hits if the line had been installed.  It does NOT serve the
-     * access; it only measures the opportunity that shadow-hit service would
-     * recover.  A linear scan is fine for measurement; a production version
-     * would need a tag lookup.
+     * The miss is classified as safe (a same-thread consumer younger than the
+     * owner) or unsafe (older, or another thread).  Only the safe class can
+     * be served; the split is the measurement that justifies Layer 3.
      */
-    bool missWouldHit(std::uint64_t addr);
+    bool missWouldHit(std::uint64_t addr, std::uint64_t consumerSeq,
+                      std::uint32_t tid);
 
     // ---------------------------------------------------------------- //
     //  Release (called by commit and the ROB)                           //
@@ -259,6 +270,10 @@ class ShadowCache : public SimObject
         statistics::Scalar lookupMisses;
         /** L1-D read misses on a line still held in the shadow. */
         statistics::Scalar missesHittingShadow;
+        /** Of those, same-thread consumers younger than the owner. */
+        statistics::Scalar safeShadowHits;
+        /** Of those, older consumers or another thread (not servable). */
+        statistics::Scalar unsafeShadowHits;
         /** Lines installed into the cache at commit. */
         statistics::Scalar promotions;
         /** Lines dropped because a store reached them. */

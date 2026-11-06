@@ -510,6 +510,38 @@ BaseCache::recvTimingReq(PacketPtr pkt)
     // Here we reset the timing of the packet.
     pkt->headerDelay = pkt->payloadDelay = 0;
 
+    // SpaceSpec: serve a held line to a younger same-thread consumer without
+    // touching memory.  This is safe precisely because the consumer cannot
+    // outlive the owner: any squash that removes the owner removes every
+    // younger instruction in the thread, so the served access is squashed
+    // too and its timing cannot be observed afterwards.
+    if (!satisfied && shadowCache && pkt->req->isShadowFill() &&
+        pkt->isRead() && !pkt->isWrite() && !pkt->req->isUncacheable() &&
+        !pkt->isLLSC() && !pkt->isLockedRMW() && !pkt->isAtomicOp() &&
+        pkt->needsResponse()) {
+        std::vector<std::uint8_t> line;
+        if (shadowCache->lineForConsumer(pkt->getBlockAddr(blkSize),
+                                         pkt->req->shadowOwnerSeq(),
+                                         pkt->req->contextId(), line)) {
+            assert(line.size() == blkSize);
+
+            // Use the temp block purely as a data carrier; it is never
+            // inserted into the tags and never announced to the crossbar.
+            tempBlock->insert({pkt->getBlockAddr(blkSize), pkt->isSecure()});
+            std::memcpy(tempBlock->data, line.data(), blkSize);
+            tempBlock->setCoherenceBits(CacheBlk::ReadableBit);
+            satisfyRequest(pkt, tempBlock);
+            tempBlock->invalidate();
+
+            ppHit->notify(CacheAccessProbeArg(pkt, accessor));
+            pkt->makeTimingResponse();
+            // The paper models a shadow access at L1 latency; four cycles
+            // keeps the serve faster than a miss but is a deliberate policy.
+            cpuSidePort.schedTimingResp(pkt, clockEdge(Cycles(4)));
+            return;
+        }
+    }
+
     if (satisfied) {
         // notify before anything else as later handleTimingReqHit might turn
         // the packet in a response
@@ -1404,13 +1436,17 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     Cycles tag_latency(0);
     blk = tags->accessBlock(pkt, tag_latency);
 
-    // SpaceSpec: Layer 3 decision counter.  A read that misses here while the
-    // line is still held in the shadow is a miss that shadow-hit service could
-    // have avoided.  Count it; do not serve it yet.
+    // SpaceSpec: classify a read miss on a held line as safe or unsafe to
+    // serve.  Safe means same thread and strictly younger than the owner:
+    // if the owner is squashed, the consumer is squashed with it, so the
+    // hit cannot survive as an oracle.
     if (shadowCache && shadowCache->interceptEnabled() &&
+        pkt->req->isShadowFill() &&
         pkt->isRead() && !pkt->isWrite() &&
         (!blk || !blk->isValid())) {
-        shadowCache->missWouldHit(pkt->getBlockAddr(blkSize));
+        shadowCache->missWouldHit(pkt->getBlockAddr(blkSize),
+                                  pkt->req->shadowOwnerSeq(),
+                                  pkt->req->contextId());
     }
 
     // SpaceSpec: a write reaching a line that is still held in the shadow

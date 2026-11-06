@@ -296,6 +296,55 @@ class ShadowBuffer
         return false;
     }
 
+    /**
+     * May a consumer read this line from the shadow?
+     *
+     * The rule is: same thread, and strictly younger than the owner
+     * (consumerSeq > ownerSeq).  That is sufficient for safety because a
+     * squash discards every instruction younger than the squash point: if
+     * the owner is squashed, the consumer is squashed with it, so the
+     * consumer's shadow hit cannot survive as a cache-residency oracle.
+     *
+     * An older consumer is refused: it could survive the owner's squash and
+     * would then have observed a line that must never have become visible.
+     * A consumer in another thread is refused because a squash in the
+     * owner's thread does not order it.
+     */
+    bool
+    isServable(std::uint64_t addr, std::uint64_t consumerSeq,
+               std::uint32_t tid) const
+    {
+        for (const auto &e : entries_) {
+            if (e.valid && e.addr == addr && e.tid == tid &&
+                e.ownerSeq < consumerSeq)
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Copy a held line for a consumer that passed isServable().
+     *
+     * The whole line is returned because the caller installs it in a
+     * temporary block and lets the normal read path extract the requested
+     * bytes; copying only the packet's slice would need a second lookup.
+     */
+    bool
+    lineForConsumer(std::uint64_t addr, std::uint64_t consumerSeq,
+                    std::uint32_t tid, std::vector<std::uint8_t> &out)
+    {
+        ++stats_.lookups;
+        for (const auto &e : entries_) {
+            if (e.valid && e.addr == addr && e.tid == tid &&
+                e.ownerSeq < consumerSeq) {
+                out = e.data;
+                ++stats_.lookupHits;
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** True if a line is currently held. */
     bool
     holds(std::uint64_t addr) const

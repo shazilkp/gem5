@@ -1132,7 +1132,8 @@ Commit::commitInsts()
         // reach it.  Entries the sweep does remove were redundant: a line
         // already resident, or one whose owner committed without needing it.
         if (cpu->shadowCache) {
-            cpu->shadowCache->retireThrough(lastCommitedSeqNum[tid] + 1, tid);
+            cpu->shadowCache->retireThrough(lastCommitedSeqNum[tid] + 1,
+                                            cpu->getContext(tid)->contextId());
         }
     }
 

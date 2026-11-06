@@ -72,6 +72,10 @@ ShadowCache::ShadowStats::ShadowStats(ShadowCache *sc)
                "Loads that found nothing in the shadow cache"),
       ADD_STAT(missesHittingShadow, statistics::units::Count::get(),
                "L1-D read misses on a line still held in the shadow"),
+      ADD_STAT(safeShadowHits, statistics::units::Count::get(),
+               "Held-line misses that are safe to serve (younger, same tid)"),
+      ADD_STAT(unsafeShadowHits, statistics::units::Count::get(),
+               "Held-line misses that are not servable (older or another tid)"),
       ADD_STAT(promotions, statistics::units::Count::get(),
                "Lines installed into the cache at commit"),
       ADD_STAT(storeDrops, statistics::units::Count::get(),
@@ -135,12 +139,35 @@ ShadowCache::lookup(std::uint64_t addr, unsigned offset,
 }
 
 bool
-ShadowCache::missWouldHit(std::uint64_t addr)
+ShadowCache::lineForConsumer(std::uint64_t addr, std::uint64_t consumerSeq,
+                             std::uint32_t tid,
+                             std::vector<std::uint8_t> &out)
+{
+    const bool hit = buffer_.lineForConsumer(addr, consumerSeq, tid, out);
+    const auto &s = buffer_.stats();
+    stats.lookupHits = s.lookupHits;
+    stats.lookupMisses = s.lookups - s.lookupHits;
+    if (hit) {
+        DPRINTF(SpaceSpec,
+                "%s: served addr %#x to younger consumer [sn:%llu] tid %d\n",
+                name(), addr, consumerSeq, (int)tid);
+    }
+    return hit;
+}
+
+bool
+ShadowCache::missWouldHit(std::uint64_t addr, std::uint64_t consumerSeq,
+                          std::uint32_t tid)
 {
     if (!buffer_.holds(addr)) {
         return false;
     }
     ++stats.missesHittingShadow;
+    if (buffer_.isServable(addr, consumerSeq, tid)) {
+        ++stats.safeShadowHits;
+    } else {
+        ++stats.unsafeShadowHits;
+    }
     return true;
 }
 
