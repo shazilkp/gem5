@@ -1449,14 +1449,13 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
                                   pkt->req->contextId());
     }
 
-    // SpaceSpec: a write reaching a line that is still held in the shadow
-    // makes that copy stale.  Drop it before the write can land, otherwise
-    // promoting it later would install pre-store data back over the store.
-    // This is the one rule that makes deferred promotion safe alongside
-    // stores.
-    if (shadowCache && shadowCache->storeHooksEnabled() &&
-        pkt->isWrite() && !pkt->isAtomicOp() &&
-        !pkt->isLLSC() && !pkt->isLockedRMW()) {
+    // SpaceSpec: any write reaching a line still held in the shadow makes
+    // that copy stale.  Drop the shadow entry before the write can land.
+    // This includes atomics, LL/SC and locked RMW: dropLine() only removes
+    // the held copy, it does not touch the resident block, so it cannot
+    // disturb an in-flight atomic.  Serving a stale held copy would be a
+    // silent wrong answer, which is worse than a re-fetch.
+    if (shadowCache && shadowCache->storeHooksEnabled() && pkt->isWrite()) {
         shadowCache->dropLine(pkt->getBlockAddr(blkSize));
     }
 

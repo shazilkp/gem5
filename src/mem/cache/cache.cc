@@ -45,6 +45,7 @@
  */
 
 #include "mem/cache/cache.hh"
+#include "mem/cache/shadow_cache.hh"
 
 #include <cassert>
 
@@ -172,6 +173,13 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
                     name());
 
         DPRINTF(Cache, "%s for %s\n", __func__, pkt->print());
+
+        // A write that never reaches BaseCache::access() still makes any
+        // shadow-held copy of the line stale.  Drop it here, or a later
+        // serve could return pre-write data.
+        if (shadowCache && shadowCache->storeHooksEnabled() && pkt->isWrite()) {
+            shadowCache->dropLine(pkt->getBlockAddr(blkSize));
+        }
 
         // flush and invalidate any existing block
         CacheBlk *old_blk(tags->findBlock({pkt->getAddr(), pkt->isSecure()}));
