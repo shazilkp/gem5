@@ -51,8 +51,10 @@
 #include "debug/HtmCpu.hh"
 #include "debug/IEW.hh"
 #include "debug/LSQUnit.hh"
+#include "mem/cache/dom_stage_a.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
+#include "sim/cur_tick.hh"
 
 namespace gem5
 {
@@ -602,6 +604,12 @@ LSQUnit::checkViolations(typename LoadQueue::iterator& loadIt,
 
 
 
+uint64_t
+LSQUnit::committedSeq() const
+{
+    return cpu->committedSeq();
+}
+
 Fault
 LSQUnit::executeLoad(const DynInstPtr &inst)
 {
@@ -619,6 +627,12 @@ LSQUnit::executeLoad(const DynInstPtr &inst)
     }
 
     load_fault = inst->initiateAcc();
+
+    if (inst->hasRequest() && inst->savedRequest) {
+        RequestPtr req = inst->savedRequest->mainReq();
+        req->setDomSeq(inst->seqNum);
+        req->setDomCommitSeq(cpu->committedSeq());
+    }
 
     if (load_fault == NoFault && !inst->readMemAccPredicate()) {
         assert(inst->readPredicate());
@@ -975,6 +989,9 @@ LSQUnit::squash(const InstSeqNum &squashed_num)
             DPRINTF(HtmCpu, ">> htmStarts (%d) : htmStops-- (%d)\n",
               htmStarts, htmStops);
         }
+        DomStageAProbe::get().squash(
+            loadQueue.back().instruction()->seqNum, curTick());
+
         // Clear the smart pointer to make sure it is decremented.
         loadQueue.back().instruction()->setSquashed();
         loadQueue.back().clear();

@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "base/logging.hh"
+#include "mem/cache/cache_blk.hh"
 #include "mem/cache/mshr.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
@@ -71,33 +72,19 @@ DomStageAProbe::flush_if_needed()
 }
 
 void
-DomStageAProbe::request(PacketPtr pkt, bool hit)
+DomStageAProbe::log_load(uint64_t seq, uint64_t tid, Addr pc, Addr addr,
+                         unsigned size, uint64_t value, Tick issue,
+                         Tick latency, unsigned kind, uint64_t fill_seq,
+                         uint64_t commit_seq, uint64_t fill_latency)
 {
-    if (!_enabled || pkt == nullptr || pkt->req == nullptr) {
-        return;
-    }
-
-    // The O3 LSQ does not populate Request::PC, so it is optional here.
-    // Snoops are excluded by isInstFetch/eviction filters; Stage A is
-    // single-core L1-only, so this is sufficient.
-    if (pkt->req->isInstFetch() || pkt->req->isPrefetch() ||
-        pkt->req->isUncacheable()) {
-        return;
-    }
-
-    if (pkt->isRead()) {
-        if (hit) {
-            return; // v0 logs misses only
-        }
-        Pending p;
-        p.tick = curTick();
-        p.pc = pc_or_zero(pkt->req.get());
-        p.addr = pkt->req->getVaddr();
-        p.size = pkt->getSize();
-        _pending[pkt->req.get()] = p;
-    } else if (pkt->isWrite() && !pkt->isEviction()) {
-        log_store(pkt);
-    }
+    _out << "L " << std::dec << seq << ' ' << tid
+         << ' ' << std::hex << pc << ' ' << addr
+         << ' ' << std::dec << size
+         << ' ' << std::hex << value
+         << ' ' << std::dec << issue << ' ' << latency << ' ' << kind
+         << ' ' << std::hex << fill_seq << ' ' << commit_seq
+         << ' ' << std::dec << fill_latency << '\n';
+    flush_if_needed();
 }
 
 void
@@ -112,6 +99,58 @@ DomStageAProbe::log_store(PacketPtr pkt)
          << ' ' << std::dec << pkt->getSize()
          << ' ' << std::hex << value << std::dec << '\n';
     flush_if_needed();
+}
+
+void
+DomStageAProbe::request(PacketPtr pkt, bool hit, CacheBlk *blk,
+                        unsigned blk_size)
+{
+    if (!_enabled || pkt == nullptr || pkt->req == nullptr) {
+        return;
+    }
+
+    if (pkt->req->isInstFetch() || pkt->req->isPrefetch() ||
+        pkt->req->isUncacheable()) {
+        return;
+    }
+
+    const uint64_t seq = pkt->req->domSeq();
+    const uint64_t commit_seq = pkt->req->domCommitSeq();
+
+    if (pkt->isRead()) {
+        if (hit) {
+            if (blk != nullptr && seq != 0 &&
+                blk->fillSeq() > commit_seq) {
+                const unsigned off = pkt->getAddr() & (blk_size - 1);
+                const uint64_t value =
+                    read_le(blk->data + off, pkt->getSize());
+                const Tick now = curTick();
+                const Tick latency = blk->fillLatency();
+
+                log_load(seq, pkt->req->contextId(),
+                         pc_or_zero(pkt->req.get()), pkt->req->getVaddr(),
+                         pkt->getSize(), value, now, latency, 1,
+                         blk->fillSeq(), commit_seq, latency);
+                _delayed.insert(seq);
+            }
+            return;
+        }
+
+        Pending p;
+        p.tick = curTick();
+        p.pc = pc_or_zero(pkt->req.get());
+        p.addr = pkt->req->getVaddr();
+        p.size = pkt->getSize();
+        p.seq = seq;
+        p.commit_seq = commit_seq;
+        p.tid = pkt->req->contextId();
+        _pending[pkt->req.get()] = p;
+        if (seq != 0) {
+            _pending_seqs.insert(seq);
+        }
+    } else if (pkt->isWrite() && !pkt->isEviction()) {
+        log_store(pkt);
+    }
 }
 
 void
@@ -134,20 +173,57 @@ DomStageAProbe::fill(PacketPtr pkt, MSHR *mshr, unsigned blk_size)
         }
 
         const Pending &p = it->second;
-        // Page offset is identical in the virtual and physical address.
         const unsigned off = target.pkt->getAddr() & (blk_size - 1);
         const uint64_t value = read_le(line + off, p.size);
-        const Tick latency = curTick() - p.tick;
+        const Tick now = curTick();
+        const Tick latency = now - p.tick;
 
-        _out << "M " << curTick()
-             << ' ' << std::hex << p.pc
-             << ' ' << p.addr
-             << ' ' << std::dec << p.size
-             << ' ' << std::hex << value
-             << ' ' << std::dec << latency << '\n';
-        flush_if_needed();
+        log_load(p.seq, p.tid, p.pc, p.addr, p.size, value, p.tick,
+                 latency, 0, p.seq, p.commit_seq, latency);
 
+        if (p.seq != 0) {
+            _pending_seqs.erase(p.seq);
+            _delayed.insert(p.seq);
+        }
         _pending.erase(it);
+    }
+}
+
+void
+DomStageAProbe::head(uint64_t seq, Tick tick)
+{
+    if (!_enabled || seq == 0) {
+        return;
+    }
+    if (_pending_seqs.count(seq) || _delayed.count(seq)) {
+        _out << "V " << std::dec << seq << ' ' << tick << '\n';
+        flush_if_needed();
+    }
+}
+
+void
+DomStageAProbe::commit(uint64_t seq, Tick tick)
+{
+    if (!_enabled || seq == 0) {
+        return;
+    }
+    _pending_seqs.erase(seq);
+    if (_delayed.erase(seq)) {
+        _out << "C " << std::dec << seq << ' ' << tick << '\n';
+        flush_if_needed();
+    }
+}
+
+void
+DomStageAProbe::squash(uint64_t seq, Tick tick)
+{
+    if (!_enabled || seq == 0) {
+        return;
+    }
+    _pending_seqs.erase(seq);
+    if (_delayed.erase(seq)) {
+        _out << "X " << std::dec << seq << ' ' << tick << '\n';
+        flush_if_needed();
     }
 }
 

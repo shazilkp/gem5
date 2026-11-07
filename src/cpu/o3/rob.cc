@@ -44,6 +44,8 @@
 
 #include "base/logging.hh"
 #include "cpu/o3/dyn_inst.hh"
+#include "mem/cache/dom_stage_a.hh"
+#include "sim/cur_tick.hh"
 #include "cpu/o3/limits.hh"
 #include "debug/Fetch.hh"
 #include "debug/ROB.hh"
@@ -251,8 +253,19 @@ ROB::retireHead(ThreadID tid)
     head_inst->clearInROB();
     head_inst->setCommitted();
 
+    if (head_inst->isSquashed()) {
+        DomStageAProbe::get().squash(head_inst->seqNum, curTick());
+    } else {
+        committedSeq = head_inst->seqNum;
+        DomStageAProbe::get().commit(head_inst->seqNum, curTick());
+    }
+
     //Update "Global" Head of ROB
     updateHead();
+
+    if (!isEmpty(tid)) {
+        DomStageAProbe::get().head(readHeadInst(tid)->seqNum, curTick());
+    }
 
     // @todo: A special case is needed if the instruction being
     // retired is the only instruction in the ROB; otherwise the tail

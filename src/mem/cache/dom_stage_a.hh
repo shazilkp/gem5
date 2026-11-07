@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "base/types.hh"
 #include "mem/packet.hh"
@@ -13,23 +14,25 @@ namespace gem5
 
 class MSHR;
 class Request;
+class CacheBlk;
 
 /**
- * Stage A preliminary trace probe.
+ * Stage A trace probe v1 (DoM delayed set + safe point + cost inputs).
  *
- * This is instrumentation only: it does not delay, allocate, or otherwise
- * change timing.  Enabled by GEM5_DOM_STAGE_A_TRACE=<path>.
+ * Enabled by GEM5_DOM_STAGE_A_TRACE=<path>.  Read-only: it never changes
+ * cache state or timing.
  *
- * Text trace v0 (a lower bound on the DoM-delayed set):
+ * Trace:
+ *   L <seq> <tid> <pc> <addr> <size> <value> <issue> <latency> <kind>
+ *     <fillSeq> <commitSeq> <fillLatency>
+ *   V <seq> <safe_tick>
+ *   C <seq> <commit_tick>
+ *   X <seq> <squash_tick>
+ *   S <tick> <pc> <addr> <size> <value>
  *
- *   M <fill_tick> <pc> <addr> <size> <value> <latency>
- *   S <commit_tick> <pc> <addr> <size> <value>
- *
- * M is an L1-D load miss and is logged when the fill returns, so the value
- * is the architectural value at that point.  S is a committed store (O3
- * drains stores at commit).  Speculative hits on still-speculative lines
- * are added in the provenance layer (A2.2); until then this misses part of
- * the DoM-delayed set.
+ * L kind 0 = L1 miss; 1 = hit on a line installed by a still-speculative
+ * fill (a DoM miss).  V is the tick the load became the ROB head (v1 safe
+ * point).  C/X mark commit/squash; only C loads are architectural.
  */
 class DomStageAProbe
 {
@@ -39,10 +42,17 @@ class DomStageAProbe
     bool enabled() const { return _enabled; }
 
     /** Called for every CPU-side request after the tag access. */
-    void request(PacketPtr pkt, bool hit);
+    void request(PacketPtr pkt, bool hit, CacheBlk *blk, unsigned blk_size);
 
     /** Called on a fill response; logs each waiting target. */
     void fill(PacketPtr pkt, MSHR *mshr, unsigned blk_size);
+
+    /** The ROB head advanced to this sequence number. */
+    void head(uint64_t seq, Tick tick);
+
+    /** This sequence number committed / was squashed. */
+    void commit(uint64_t seq, Tick tick);
+    void squash(uint64_t seq, Tick tick);
 
   private:
     DomStageAProbe();
@@ -54,8 +64,15 @@ class DomStageAProbe
         Addr pc;
         Addr addr;
         unsigned size;
+        uint64_t seq;
+        uint64_t commit_seq;
+        uint64_t tid;
     };
 
+    void log_load(uint64_t seq, uint64_t tid, Addr pc, Addr addr,
+                  unsigned size, uint64_t value, Tick issue, Tick latency,
+                  unsigned kind, uint64_t fill_seq, uint64_t commit_seq,
+                  uint64_t fill_latency);
     void log_store(PacketPtr pkt);
     void flush_if_needed();
 
@@ -63,6 +80,8 @@ class DomStageAProbe
     bool _enabled;
     unsigned _lines;
     std::unordered_map<const Request *, Pending> _pending;
+    std::unordered_set<uint64_t> _pending_seqs;
+    std::unordered_set<uint64_t> _delayed;
 };
 
 } // namespace gem5

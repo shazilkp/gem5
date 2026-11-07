@@ -408,6 +408,9 @@ class LSQUnit
 
     BaseMMU *getMMUPtr();
 
+    /** Stage A: committed sequence number for load provenance. */
+    uint64_t committedSeq() const;
+
   private:
     /** Pointer to the CPU. */
     CPU *cpu;

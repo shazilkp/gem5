@@ -319,6 +319,9 @@ class ROB
     /** Number of instructions in the ROB. */
     int numInstsInROB;
 
+    /** Stage A: sequence number of the last committed instruction. */
+    InstSeqNum committedSeq = 0;
+
     /** Dummy instruction returned if there are no insts left. */
     DynInstPtr dummyInst;
 

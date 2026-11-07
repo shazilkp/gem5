@@ -463,6 +463,12 @@ class Request : public Extensible<Request>
     /** program counter of initiating access; for tracing/debugging */
     Addr _pc = MaxAddr;
 
+    /** Stage A: sequence number of the load that issued this request. */
+    uint64_t _domSeq = 0;
+
+    /** Stage A: committed sequence number at the point of issue. */
+    uint64_t _domCommitSeq = 0;
+
     /** Sequence number of the instruction that creates the request */
     InstSeqNum _reqInstSeqNum = 0;
 
@@ -523,7 +529,9 @@ class Request : public Extensible<Request>
           _time(other._time),
           _taskId(other._taskId), _vaddr(other._vaddr),
           _extraData(other._extraData), _contextId(other._contextId),
-          _pc(other._pc), _reqInstSeqNum(other._reqInstSeqNum),
+          _pc(other._pc),
+          _domSeq(other._domSeq), _domCommitSeq(other._domCommitSeq),
+          _reqInstSeqNum(other._reqInstSeqNum),
           _localAccessor(other._localAccessor),
           translateDelta(other.translateDelta),
           accessDelta(other.accessDelta), depth(other.depth)
@@ -974,6 +982,14 @@ class Request : public Extensible<Request>
         assert(hasPC());
         return _pc;
     }
+
+    /** Stage A provenance: issuing load sequence number. */
+    void setDomSeq(uint64_t seq) { _domSeq = seq; }
+    uint64_t domSeq() const { return _domSeq; }
+
+    /** Stage A provenance: committed sequence number at issue. */
+    void setDomCommitSeq(uint64_t seq) { _domCommitSeq = seq; }
+    uint64_t domCommitSeq() const { return _domCommitSeq; }
 
     /**
      * Increment/Get the depth at which this request is responded to.

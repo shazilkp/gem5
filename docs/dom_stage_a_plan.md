@@ -36,6 +36,14 @@ Stage A does **not** answer:
   `tests/test-progs/dom_stage_a/array_pattern.c`,
   `tests/dom_stage_a/check_trace.py`. Checker validated on a synthetic trace;
   a value mutation is caught.
+- **A2.2/A2.3 done.** Request/block provenance (`domSeq`, `domCommitSeq`,
+  `fillSeq`, `fillLatency`), ROB `committedSeq`, v1 safe point when a load
+  becomes head, commit/squash events, v1 `L/V/C/X/S` trace and causal
+  replay (squashed loads excluded; cost `min(safe - issue, latency)`).
+  Microbenchmarks: array_pattern per-word 75.0% / region 98.0%; spec-hit 5;
+  squash 58 excluded. Probe-off/on identical IPC 1.013116; v1 trace
+  bit-identical across runs; disabling speculative-hit detection fails the
+  spec test.
 - **v0 limits (deliberate).** Misses only, so it is a *lower bound* on the
   DoM-delayed set; no safe tick, no cost weighting; completed misses are
   treated as committed (optimistic). A2.2 adds provenance (fill sequence +

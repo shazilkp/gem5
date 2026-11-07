@@ -463,6 +463,9 @@ class CPU : public BaseCPU
     std::vector<BaseISA *> isa;
 
   public:
+    /** Stage A: committed sequence number for load provenance. */
+    InstSeqNum committedSeq() const { return rob.committedSeq; }
+
     /** Enum to give each stage a specific index, so when calling
      *  activateStage() or deactivateStage(), they can specify which stage
      *  is being activated/deactivated.

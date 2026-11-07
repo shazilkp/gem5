@@ -103,11 +103,23 @@ class CacheBlk : public TaggedEntry
      */
     uint8_t *data = nullptr;
 
+    /** Stage A: sequence number of the load that installed this line
+     *  (0 means the fill was not a speculative load). */
+    uint64_t _fillSeq = 0;
+
+    /** Stage A: latency of the fill that installed this line. */
+    uint64_t _fillLatency = 0;
+
     /**
      * Which curTick() will this block be accessible. Its value is only
      * meaningful if the block is valid.
      */
     Tick whenReady = 0;
+
+    void setFillSeq(uint64_t seq) { _fillSeq = seq; }
+    uint64_t fillSeq() const { return _fillSeq; }
+    void setFillLatency(uint64_t lat) { _fillLatency = lat; }
+    uint64_t fillLatency() const { return _fillLatency; }
 
   protected:
     /**

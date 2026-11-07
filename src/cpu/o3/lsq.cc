@@ -1302,7 +1302,10 @@ void
 LSQ::SingleDataRequest::sendPacketToCache()
 {
     assert(_numOutstandingPackets == 0);
-    if (lsqUnit()->trySendPacket(isLoad(), _packets.at(0)))
+    PacketPtr pkt = _packets.at(0);
+    pkt->req->setDomSeq(instruction()->seqNum);
+    pkt->req->setDomCommitSeq(lsqUnit()->committedSeq());
+    if (lsqUnit()->trySendPacket(isLoad(), pkt))
         _numOutstandingPackets = 1;
 }
 
@@ -1310,9 +1313,14 @@ void
 LSQ::SplitDataRequest::sendPacketToCache()
 {
     /* Try to send the packets. */
-    while (numReceivedPackets + _numOutstandingPackets < _packets.size() &&
-            lsqUnit()->trySendPacket(isLoad(),
-                _packets.at(numReceivedPackets + _numOutstandingPackets))) {
+    while (numReceivedPackets + _numOutstandingPackets < _packets.size()) {
+        PacketPtr pkt =
+            _packets.at(numReceivedPackets + _numOutstandingPackets);
+        pkt->req->setDomSeq(instruction()->seqNum);
+        pkt->req->setDomCommitSeq(lsqUnit()->committedSeq());
+        if (!lsqUnit()->trySendPacket(isLoad(), pkt)) {
+            break;
+        }
         _numOutstandingPackets++;
     }
 }

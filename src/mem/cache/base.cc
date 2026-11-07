@@ -488,7 +488,7 @@ BaseCache::recvTimingReq(PacketPtr pkt)
     }
 
     // Stage A instrumentation: read-only, no timing or state changes.
-    DomStageAProbe::get().request(pkt, satisfied);
+    DomStageAProbe::get().request(pkt, satisfied, blk, blkSize);
 
     // Here we charge the headerDelay that takes into account the latencies
     // of the bus, if the packet comes from it.
@@ -612,6 +612,9 @@ BaseCache::recvTimingResp(PacketPtr pkt)
         blk = handleFill(pkt, blk, writebacks, allocate);
         assert(blk != nullptr);
         ppFill->notify(CacheAccessProbeArg(pkt, accessor));
+
+        blk->setFillSeq(pkt->req->domSeq());
+        blk->setFillLatency(miss_latency);
 
         DomStageAProbe::get().fill(pkt, mshr, blkSize);
     }

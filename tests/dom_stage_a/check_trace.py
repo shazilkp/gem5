@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Smoke-check a Stage A trace (v0: load misses + committed stores)."""
+"""Check the array_pattern microbenchmark trace (v1 or v0)."""
 
 import argparse
 import os
 import re
 import sys
 
-# Allow running this script directly from anywhere: put the repo root on
-# sys.path so `tools.dom_stage_a` resolves.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from tools.dom_stage_a.analyzer import PerWordOracle
+from tools.dom_stage_a.regions import RegionOracle
+from tools.dom_stage_a.trace_replay import parse, replay
 
 
 def parse_ranges(stdout_path):
@@ -22,21 +22,26 @@ def parse_ranges(stdout_path):
     return int(m.group(1), 16), int(m.group(2), 16), int(m.group(3))
 
 
-def parse_trace(path):
-    events = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            p = line.split()
-            if not p:
-                continue
-            if p[0] == "M":
-                events.append(("M", int(p[1]), int(p[2], 16), int(p[3], 16),
-                               int(p[4]), int(p[5], 16), int(p[6])))
-            elif p[0] == "S":
-                events.append(("S", int(p[1]), int(p[2], 16), int(p[3], 16),
-                               int(p[4]), int(p[5], 16), 0))
-    events.sort(key=lambda e: (e[1], 0 if e[0] == "S" else 1))
-    return events
+def region_stats(res, lo, hi):
+    selected = [(l, h) for l, h in res.results if lo <= l.addr < hi]
+    total = len(selected)
+    hits = sum(1 for _, h in selected if h)
+    weight = sum(l.cost for l, _ in selected)
+    wh = sum(l.cost for l, h in selected if h)
+    return total, hits, weight, wh
+
+
+def report(name, res, a_base, z_base, n):
+    print(f"{name}: loads={res.loads} hits={res.hits} "
+          f"count={res.count_fraction:.3f} "
+          f"weighted={res.weight_fraction:.3f} "
+          f"committed={res.committed} squashed={res.squashed} "
+          f"unresolved={res.unresolved}")
+    for rname, lo in (("affine", a_base), ("zeros", z_base)):
+        t, h, w, wh = region_stats(res, lo, lo + 4 * n)
+        print(f"  {rname:6s}: loads={t:7d} hits={h:7d} "
+              f"count={h / t if t else 0:.3f} "
+              f"weighted={wh / w if w else 0:.3f}")
 
 
 def main():
@@ -46,60 +51,29 @@ def main():
     args = ap.parse_args()
 
     a_base, z_base, n = parse_ranges(args.stdout)
-    events = parse_trace(args.trace)
-    oracle = PerWordOracle()
+    loads, stores = parse(args.trace)
 
-    # hits, total, weighted hits, weighted total
-    stats = {"affine": [0, 0, 0, 0], "zeros": [0, 0, 0, 0], "other": [0, 0, 0, 0]}
+    pw = replay(loads, stores, PerWordOracle())
+    rg = replay(loads, stores, RegionOracle(block_size=4096))
 
-    def region(addr):
-        if a_base <= addr < a_base + 4 * n:
-            return "affine"
-        if z_base <= addr < z_base + 4 * n:
-            return "zeros"
-        return "other"
-
-    for e in events:
-        if e[0] == "S":
-            _, tick, pc, addr, size, value, _ = e
-            oracle.store(addr, size, value, tick)
-        else:
-            _, tick, pc, addr, size, value, latency = e
-            s = stats[region(addr)]
-            s[1] += 1
-            s[3] += latency
-            if oracle.lookup(addr, tick) == value:
-                s[0] += 1
-                s[2] += latency
-            # v0 has no commit/squash info; treat a completed miss as committed.
-            oracle.load(addr, size, value, tick, committed=True)
-
-    total = sum(s[1] for s in stats.values())
-    hits = sum(s[0] for s in stats.values())
-    print(f"events={len(events)} loads={total} hits={hits} "
-          f"count={hits / total if total else 0:.3f}")
-    for name, s in stats.items():
-        if s[1]:
-            print(f"  {name:6s}: loads={s[1]:7d} hits={s[0]:7d} "
-                  f"count={s[0] / s[1]:.3f} "
-                  f"weighted={s[2] / s[3] if s[3] else 0:.3f}")
+    report("per-word", pw, a_base, z_base, n)
+    report("region4k", rg, a_base, z_base, n)
 
     ok = True
-    if stats["affine"][1] == 0:
-        print("FAIL: no affine-region loads in the trace", file=sys.stderr)
-        ok = False
-    elif stats["affine"][0] / stats["affine"][1] < 0.80:
-        print("FAIL: affine coverage below 0.80", file=sys.stderr)
-        ok = False
-    if stats["zeros"][1] == 0:
-        print("FAIL: no zeros-region loads in the trace", file=sys.stderr)
-        ok = False
-    elif stats["zeros"][0] / stats["zeros"][1] < 0.30:
-        print("FAIL: zeros coverage below 0.30", file=sys.stderr)
-        ok = False
-    if total == 0 or hits / total < 0.50:
-        print("FAIL: overall coverage below 0.50", file=sys.stderr)
-        ok = False
+
+    def check(label, res, rname, lo, minimum):
+        nonlocal ok
+        t, h, _, _ = region_stats(res, lo, lo + 4 * n)
+        frac = h / t if t else 0.0
+        if t == 0 or frac < minimum:
+            print(f"FAIL: {label} {rname} coverage {frac:.3f} < {minimum}",
+                  file=sys.stderr)
+            ok = False
+
+    check("per-word", pw, "affine", a_base, 0.80)
+    check("per-word", pw, "zeros", z_base, 0.30)
+    check("region4k", rg, "affine", a_base, 0.80)
+    check("region4k", rg, "zeros", z_base, 0.80)
 
     return 0 if ok else 1
 
