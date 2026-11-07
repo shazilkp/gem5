@@ -92,6 +92,17 @@ zero stores).
 | determinism | v1 trace bit-identical across runs (`sha256 42f3b197...`) |
 | mutation | disabling speculative-hit detection -> spec test fails (`spec=0`) |
 
+## v1 local mcf 50M (real-workload plumbing check)
+
+- Timing identical to the v0 screen: 25,961,569 cycles, IPC 1.925924.
+- Trace 345 MB; committed 42,535, squashed 11,080, unresolved 3,466.
+- kind 0 (L1 miss) 42,451; kind 1 (speculative hit) 84; spec-hit coverage
+  72/84; ordinary miss coverage 2,046/42,451 at 65K.
+- T2 @4K 0.19%, @65K **4.98%** (cost-weighted **8.52%**);
+  T3 64 B 0.43%, 4 KiB 0.00%.
+- The committed-only percentage is higher than the v0 screen (2.79%) because
+  squashed/unresolved misses are excluded, not because mcf became regular.
+
 ## Caveats
 
 - **v0 is a lower bound.** It misses speculative hits, treats completed

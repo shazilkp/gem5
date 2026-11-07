@@ -19,3 +19,4 @@ spec-ref-200m,541.leela_r,200M,ref,22551371,3913,0.3174,0.5096,0.0164,0.0020,263
 spec-ref-200m,548.exchange2_r,200M,ref,21945986,1160,0.0379,0.0612,0.0836,0.0043,693,6,v0 lower bound; tiny sample
 spec-local-50m,523.xalancbmk_r,50M,test,6729553,474522,0.4311,0.6607,0.0421,0.0006,1982,26,local; v0 lower bound; T2 infinite 0.7456
 spec-local-50m,505.mcf_r,50M,test,7570003,56923,0.0005,0.0279,0.0070,0.0001,3091,4,local; v0 lower bound; T2 infinite 0.0299
+spec-test-50m-v1,505.mcf_r,50M,test,7570004,42535,0.0019,0.0498,0.0043,0.0000,3187,3,v1 committed-only; 11080 squashed; 84 spec-hits; cost-weighted 0.0852
