@@ -42,6 +42,27 @@ region (zero/constant/affine). Region descriptors are **unlimited** here;
 | 541.leela_r | 3,913 | 31.7% | **51.0%** | 1.64% | 0.20% | 26,359 / 411 |
 | 548.exchange2_r | 1,160 | 3.79% | 6.12% | 8.36% | 0.43% | 693 / 6 |
 
+## v1 ref 200M (valid delayed set)
+
+Committed-only; squashed loads excluded; cost = `min(safe-issue, latency)`.
+`spec` is the speculative-hit subset (`kind1`).
+
+| bench | committed | T2 @4K | T2 @65K | weighted | T3 64 B | T3 4 KiB | spec-hit coverage |
+|---|---|---|---|---|---|---|---|
+| 505.mcf_r | 168,558 | 0.67% | 3.98% | 5.85% | 0.56% | 0.01% | 95.6% |
+| 519.lbm_r | 13,483,681 | 0.26% | 0.26% | 0.22% | 20.0% | 0.00% | 0.04% |
+| 520.omnetpp_r | 1,078,120 | **56.9%** | **88.3%** | 87.45% | 13.8% | 0.06% | 96.4% |
+| 541.leela_r | 2,602 | 45.9% | 66.1% | 64.8% | 0.19% | 0.00% | 100% |
+| 548.exchange2_r | 670 | 3.88% | 5.07% | 1.75% | 0.60% | 0.15% | 100% |
+| 531.deepsjeng_r | analysis skipped (1,178 loads; memory); v0 1.5% | | | | | | |
+
+The v1 committed-only numbers are higher than the v0 screens for mcf,
+omnetpp and leela because squashed and unresolved misses (which were less
+covered) are excluded and speculative hits are added. lbm and exchange2 are
+effectively unchanged. Speculative hits are covered at 95-100% on four of
+five workloads; ordinary misses are the hard case. lbm is the exception
+(1.24M speculative hits, 0.04% covered).
+
 ## Test 50M (v0)
 
 | bench | loads | T2 @4K | T2 @65K | T3 64 B | T3 4 KiB |
