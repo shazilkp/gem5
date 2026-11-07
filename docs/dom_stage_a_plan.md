@@ -40,6 +40,13 @@ Stage A does **not** answer:
   DoM-delayed set; no safe tick, no cost weighting; completed misses are
   treated as committed (optimistic). A2.2 adds provenance (fill sequence +
   commit watermark), A2.3 adds the safe point and cost model.
+- **Real-workload scale check (mcf, local).** 5M -> 37 MB / 11 s; 50M ->
+  341 MB / 97 s, 7.57M stores, 56,980 misses. Probe v0 per-word coverage on
+  the 50M trace: 3.0% count / 3.6% weighted (1,701 hits, 568,603 unique
+  words, zero tick-order violations). **Not representative:** that window is
+  warm (IPC 1.93 vs 0.35 on the full 1B run, 0.11% vs ~1.9% miss rate), so
+  this is a plumbing/scale check, not the Stage A number. 200M belongs on
+  the server; the region (T3) oracle is still unmeasured.
 - **Local build** `scons build/RISCV/gem5.opt -j2` in progress; the SPEC
   campaign runs on the server.
 
