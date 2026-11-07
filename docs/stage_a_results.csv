@@ -1,0 +1,21 @@
+series,workload,window,input,stores,loads,t2_4k,t2_65k,t3_64b,t3_4k,desc_64b,desc_4k,notes
+spec-test-50m,505.mcf_r,50M,test,7570003,56923,0.0005,0.0279,0.0072,0.0001,3091,4,v0 lower bound; test input
+spec-test-50m,519.lbm_r,50M,test,45445981,302,0.0066,0.0066,0.0629,0.0033,1136153,3,v0 lower bound; tiny load sample
+spec-test-50m,520.omnetpp_r,50M,test,6933969,281264,0.5032,0.6236,0.0848,0.0010,1255,21,v0 lower bound
+spec-test-50m,531.deepsjeng_r,50M,test,39286709,1065,0.0160,0.0160,0.0685,0.0000,4901730,76585,v0 lower bound; store-heavy; tiny sample
+spec-test-50m,541.leela_r,50M,test,5820280,2326,0.1625,0.4316,0.0275,0.0034,31292,489,v0 lower bound; small sample
+spec-test-50m,548.exchange2_r,50M,test,5071812,1149,0.0383,0.0609,0.0836,0.0035,694,6,v0 lower bound; tiny sample
+spec-ref-50m,505.mcf_r,50M,ref,7591004,82062,0.0002,0.0107,0.0056,0.0000,7686,3,v0 lower bound; ref input
+spec-ref-50m,519.lbm_r,50M,ref,45446039,302,0.0066,0.0066,0.0629,0.0033,1136153,2,v0 lower bound; shares test prefix
+spec-ref-50m,520.omnetpp_r,50M,ref,6933966,280090,0.5043,0.6252,0.0849,0.0010,1247,18,v0 lower bound
+spec-ref-50m,531.deepsjeng_r,50M,ref,39286709,1065,0.0160,0.0160,0.0685,0.0000,4901730,76585,v0 lower bound; bit-identical to test
+spec-ref-50m,541.leela_r,50M,ref,5820279,2326,0.1625,0.4312,0.0275,0.0034,31293,489,v0 lower bound; shares test prefix
+spec-ref-50m,548.exchange2_r,50M,ref,5071812,1149,0.0383,0.0609,0.0836,0.0035,694,6,v0 lower bound; bit-identical to test
+spec-ref-200m,505.mcf_r,200M,ref,29206914,229324,0.0002,0.0234,0.0037,0.0000,7615,3,v0 lower bound; negative pole
+spec-ref-200m,519.lbm_r,200M,ref,64308149,12453218,0.0027,0.0027,0.2180,0.0000,1340055,3,v0 lower bound; T3 needs 1.34M descriptors
+spec-ref-200m,520.omnetpp_r,200M,ref,28483244,1585000,0.3385,0.6918,0.0855,0.0004,3224,13,v0 lower bound; strongest T2
+spec-ref-200m,531.deepsjeng_r,200M,ref,159285476,1133,0.0150,0.0150,0.0733,0.0000,11434444,178656,v0 lower bound; store-heavy; tiny sample
+spec-ref-200m,541.leela_r,200M,ref,22551371,3913,0.3174,0.5096,0.0164,0.0020,26359,411,v0 lower bound; small sample
+spec-ref-200m,548.exchange2_r,200M,ref,21945986,1160,0.0379,0.0612,0.0836,0.0043,693,6,v0 lower bound; tiny sample
+spec-local-50m,523.xalancbmk_r,50M,test,6729553,474522,0.4311,0.6607,0.0421,0.0006,1982,26,local; v0 lower bound; T2 infinite 0.7456
+spec-local-50m,505.mcf_r,50M,test,7570003,56923,0.0005,0.0279,0.0070,0.0001,3091,4,local; v0 lower bound; T2 infinite 0.0299
