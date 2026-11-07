@@ -18,18 +18,36 @@ This is the implementation stage. Stage A only instrumented and profiled.
 The decisive comparison is 3 (1 MiB provider) vs 4 (1 MiB cache): same area,
 same DoM, different way to supply the value.
 
-## DoM model (B1)
+## DoM model (B1/B2/B3)
 
-Simplest correct model first: **head delay**.
+Implement the paper's **delay-on-miss** (third version), not the naive/eager
+baselines:
 
-- A load that misses L1 while speculative is not sent to the cache.
-- It is released when it becomes the ROB head (the v1 safe point).
-- On squash, the delayed request is dropped; no state changed.
-- Correctness: architectural equality with the baseline; the delayed load
-  eventually performs the real access; no reads are served from the shadow.
+- **Shadow buffer (SB):** circular, one entry per ROB instruction, in dispatch
+  order; a "casts" bit is cleared when the instruction no longer casts; an
+  entry is removed only at the head. Track the shadow types: C (branches),
+  E (memory/arithmetic exceptions), D (stores with unresolved addresses),
+  M (TSO load-load order). Start with C+E, then add D/M.
+- **Release queue:** one entry per load; record the youngest shadow-casting SB
+  entry at the load's dispatch (the shadow stamp). The load is released when
+  that SB entry exits the SB.
+- **Shadowed L1 hit:** the cache returns the data, but the visible side
+  effects (replacement/LRU, prefetch) are delayed. On release the CPU signals
+  the cache to perform them.
+- **Shadowed L1 miss:** the request is **dropped** (a "shadowed L1 miss"); no
+  MSHR allocation, no cache state change. On release the load re-issues the
+  request and the normal miss path runs.
+- **Squash:** the load's release-queue entry and any pending re-issue are
+  dropped; nothing was allocated.
+- **VP/provider:** optional. In Stage B the exact value provider replaces the
+  VP; it is queried on the shadowed L1 miss before the drop, and the release
+  path is skipped when it serves.
+- **Correctness:** architectural equality; a hit's data is exact; a miss's
+  data arrives after release; no speculative cache state.
 
-Later refinement: release when all older branches are resolved (v2), as in
-ISCA'19.
+This is the piece that must be right before any provider measurement: a hit
+must not update the LRU, a miss must not allocate, and the release must do the
+deferred work.
 
 ## Provider (B4)
 
@@ -59,14 +77,20 @@ Each layer: write the test, show red, implement, green, mutation, regress.
 
 - **B0** harness: a program that mixes loads/stores/branches/squashes/atomics;
   baseline/DoM equality; a timeout.
-- **B1** delay + safe + release: the load is held on a speculative miss and
-  released at the head; a microbench shows the expected IPC loss.
-- **B2** squash: a delayed load in a mispredicted path is dropped, not served.
-- **B3** provider: a store then a load hits the table; a store invalidates;
+- **B1** SB + release queue + C-shadow: a load after an unresolved branch is
+  held; a shadowed L1 miss is dropped and re-issued after release; a hit
+  returns data.
+- **B2** hit side-effect delay: a shadowed hit returns data but the LRU is not
+  updated until the release; the release updates it.
+- **B3** E/D/M shadows: older memory/arithmetic (E), unresolved store (D),
+  TSO load-load (M); each releases at the correct point.
+- **B4** squash: a delayed load in a mispredicted path is dropped, not served;
+  no MSHR, no LRU, no release entry leaks.
+- **B5** provider: a store then a load hits the table; a store invalidates;
   an older in-flight store forwards (not the table); a permission-fault load
   is not served; a speculatively-filled value does not populate.
-- **B4** larger cache: the config; architectural equality; the same workload.
-- **B5** SPEC: the arms above; IPC; the comparison.
+- **B6** larger cache: the config; architectural equality; the same workload.
+- **B7** SPEC: the arms above; IPC; the comparison.
 
 ## Tests first
 
