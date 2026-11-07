@@ -47,8 +47,14 @@ Stage A does **not** answer:
   warm (IPC 1.93 vs 0.35 on the full 1B run, 0.11% vs ~1.9% miss rate), so
   this is a plumbing/scale check, not the Stage A number. 200M belongs on
   the server; the region (T3) oracle is still unmeasured.
-- **Local build** `scons build/RISCV/gem5.opt -j2` in progress; the SPEC
-  campaign runs on the server.
+- **T3 region oracle on the 50M mcf trace.** 4 KiB blocks: 3/56,980 hits
+  (0.01%); 256 B: 33 (0.06%); 64 B: 398 (0.70%). At 4 KiB only 4 descriptors
+  exist, so the 64/256/1024 budgets are not binding: the limiter is data
+  regularity, not capacity. T2 per-word (3.0%) beats T3 on this window.
+  Caveat: warm window, v0 lower bound; mcf is one pole. A regular workload
+  must be measured before generalizing.
+- **Local build** `scons build/RISCV/gem5.opt -j4` done; the SPEC campaign
+  runs on the server.
 
 ## Validity contract (what makes the number meaningful)
 
