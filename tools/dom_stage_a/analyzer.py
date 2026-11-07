@@ -8,6 +8,7 @@ contract, and the implementation below follows them.
 from __future__ import annotations
 
 import enum
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Sequence
 
@@ -147,9 +148,11 @@ class PerWordOracle:
     update tick.
     """
 
-    def __init__(self, committed_only: bool = True) -> None:
+    def __init__(self, committed_only: bool = True,
+                 capacity: Optional[int] = None) -> None:
         self.committed_only = committed_only
-        self._values: dict[int, tuple[int, int]] = {}
+        self.capacity = capacity
+        self._values: OrderedDict[int, tuple[int, int]] = OrderedDict()
 
     def _record(self, addr: int, size: int, value: int, tick: int) -> None:
         # Word-granular table, little-endian word extraction.
@@ -157,7 +160,11 @@ class PerWordOracle:
             if off >= size:
                 break
             word = (value >> (8 * off)) & 0xFFFFFFFF
-            self._values[addr + off] = (tick, word)
+            key = addr + off
+            self._values[key] = (tick, word)
+            self._values.move_to_end(key)
+            if self.capacity is not None and len(self._values) > self.capacity:
+                self._values.popitem(last=False)
 
     def store(self, addr: int, size: int, value: int, tick: int) -> None:
         self._record(addr, size, value, tick)
@@ -171,6 +178,7 @@ class PerWordOracle:
         entry = self._values.get(addr)
         if entry is None or entry[0] >= tick:
             return None
+        self._values.move_to_end(addr)
         return entry[1]
 
 

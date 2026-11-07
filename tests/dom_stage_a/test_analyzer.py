@@ -114,6 +114,24 @@ class TestPerWordOracle(unittest.TestCase):
         self.assertEqual(o.lookup(self.ADDR, tick=11), 7)
 
 
+class TestFiniteValueTable(unittest.TestCase):
+    def test_lru_eviction(self):
+        o = PerWordOracle(capacity=2)
+        o.store(0x1000, 4, 1, tick=1)
+        o.store(0x2000, 4, 2, tick=2)
+        self.assertEqual(o.lookup(0x1000, tick=3), 1)  # touch 0x1000
+        o.store(0x3000, 4, 3, tick=4)                  # evict LRU 0x2000
+        self.assertIsNone(o.lookup(0x2000, tick=5))
+        self.assertEqual(o.lookup(0x1000, tick=5), 1)
+        self.assertEqual(o.lookup(0x3000, tick=5), 3)
+
+    def test_infinite_by_default(self):
+        o = PerWordOracle()
+        for i in range(10):
+            o.store(0x1000 + 4 * i, 4, i, tick=i + 1)
+        self.assertEqual(o.lookup(0x1000, tick=100), 0)
+
+
 class TestCoverage(unittest.TestCase):
     def test_count_and_weight(self):
         loads = [

@@ -53,6 +53,12 @@ Stage A does **not** answer:
   regularity, not capacity. T2 per-word (3.0%) beats T3 on this window.
   Caveat: warm window, v0 lower bound; mcf is one pole. A regular workload
   must be measured before generalizing.
+- **Regular-workload contrast (xalancbmk, 50M).** T2 per-word infinite 74.6%
+  (353,819 / 474,522); finite: 256 -> 3.4%, 1K -> 18.8%, 4K -> 43.1%,
+  16K -> 54.6%, 64K -> 66.1%, 256K -> 74.1%. T3 region: 4 KiB 0.06%,
+  64 B 4.2%. The exact per-word cache is the strong mechanism on this
+  workload; pattern compression is not. The two are complementary by data
+  type, not substitutes.
 - **Local build** `scons build/RISCV/gem5.opt -j4` done; the SPEC campaign
   runs on the server.
 

@@ -19,10 +19,13 @@ from tools.dom_stage_a.analyzer import PerWordOracle
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trace")
+    ap.add_argument("--capacity", type=int, default=0,
+                    help="word entries; 0 means unlimited")
     ap.add_argument("--max-events", type=int, default=0)
     args = ap.parse_args()
 
-    oracle = PerWordOracle()
+    capacity = None if args.capacity <= 0 else args.capacity
+    oracle = PerWordOracle(capacity=capacity)
     loads = hits = weight = weight_hits = stores = 0
     last_tick = -1
     out_of_order = 0
@@ -57,10 +60,11 @@ def main():
                     weight_hits += latency
                 oracle.load(addr, size, value, tick, committed=True)
 
-    print(f"stores={stores} loads={loads} hits={hits} "
-          f"count={hits / loads if loads else 0:.4f} "
+    print(f"capacity={args.capacity} stores={stores} loads={loads} "
+          f"hits={hits} count={hits / loads if loads else 0:.4f} "
           f"weighted={weight_hits / weight if weight else 0:.4f} "
-          f"entries={len(oracle._values)} tick_order_violations={out_of_order}")
+          f"entries={len(oracle._values)} "
+          f"tick_order_violations={out_of_order}")
 
 
 if __name__ == "__main__":
