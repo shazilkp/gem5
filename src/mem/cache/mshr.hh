@@ -476,6 +476,9 @@ class MSHR : public QueueEntry, public Printable
         return &targets.front();
     }
 
+    /** Read-only access for instrumentation (Stage A trace probe). */
+    const TargetList &getTargets() const { return targets; }
+
     /**
      * Pop first target.
      */

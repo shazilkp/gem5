@@ -46,6 +46,7 @@ SimObject('Cache.py', sim_objects=[
 Source('base.cc')
 Source('cache.cc')
 Source('cache_blk.cc')
+Source('dom_stage_a.cc')
 Source('mshr.cc')
 Source('mshr_queue.cc')
 Source('noncoherent_cache.cc')

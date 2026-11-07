@@ -54,6 +54,7 @@
 #include "debug/CacheVerbose.hh"
 #include "debug/HWPrefetch.hh"
 #include "mem/cache/compressors/base.hh"
+#include "mem/cache/dom_stage_a.hh"
 #include "mem/cache/mshr.hh"
 #include "mem/cache/mshr_queue.hh"
 #include "mem/cache/prefetch/base.hh"
@@ -486,6 +487,9 @@ BaseCache::recvTimingReq(PacketPtr pkt)
         doWritebacks(writebacks, clockEdge(lat + forwardLatency));
     }
 
+    // Stage A instrumentation: read-only, no timing or state changes.
+    DomStageAProbe::get().request(pkt, satisfied);
+
     // Here we charge the headerDelay that takes into account the latencies
     // of the bus, if the packet comes from it.
     // The latency charged is just the value set by the access() function.
@@ -608,6 +612,8 @@ BaseCache::recvTimingResp(PacketPtr pkt)
         blk = handleFill(pkt, blk, writebacks, allocate);
         assert(blk != nullptr);
         ppFill->notify(CacheAccessProbeArg(pkt, accessor));
+
+        DomStageAProbe::get().fill(pkt, mshr, blkSize);
     }
 
     // Don't want to promote the Locked RMW Read until
