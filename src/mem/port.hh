@@ -143,6 +143,17 @@ class RequestPort: public Port, public AtomicRequestProtocol,
     SimObject &owner;
 
   public:
+    /**
+     * The response port this request port is bound to, or nullptr if the
+     * port has not been bound yet.  This is used by Delay-on-Miss to reach
+     * the L1 data cache without adding a new SimObject parameter.
+     */
+    ResponsePort *
+    getResponsePort() const
+    {
+        return _responsePort;
+    }
+
     [[deprecated("RequestPort ownership is deprecated. "
                  "Owner should now be registered in derived classes.")]]
     RequestPort(const std::string& name, SimObject* _owner,

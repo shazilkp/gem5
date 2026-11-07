@@ -296,6 +296,7 @@ class BaseCache : public ClockedObject
      * The CPU-side port extends the base cache response port with access
      * functions for functional, atomic and timing requests.
      */
+  public:
     class CpuSidePort : public CacheResponsePort
     {
       protected:
@@ -315,6 +316,13 @@ class BaseCache : public ClockedObject
 
         CpuSidePort(const std::string &_name, BaseCache& _cache,
                     const std::string &_label);
+
+        /** The cache this port is attached to (used by Delay-on-Miss). */
+        BaseCache &
+        getCache()
+        {
+            return cache;
+        }
 
     };
 

@@ -411,6 +411,9 @@ class LSQUnit
     /** Stage A: committed sequence number for load provenance. */
     uint64_t committedSeq() const;
 
+    /** Delay-on-Miss: re-issue loads whose caster has been verified. */
+    void releaseShadowed(InstSeqNum caster);
+
   private:
     /** Pointer to the CPU. */
     CPU *cpu;
@@ -563,6 +566,13 @@ class LSQUnit
         statistics::Average lqAvgOccupancy;
         /** SQ Occupancy */
         statistics::Average sqAvgOccupancy;
+
+        /** Delay-on-Miss: loads that executed under an unresolved shadow. */
+        statistics::Scalar domShadowedLoads;
+        /** Delay-on-Miss: shadowed loads whose L1 probe missed. */
+        statistics::Scalar domDelayedMisses;
+        /** Delay-on-Miss: delayed loads re-issued after caster verification. */
+        statistics::Scalar domReleased;
     } stats;
 
   public:

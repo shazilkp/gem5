@@ -43,6 +43,8 @@
 
 #include "cpu/o3/cpu.hh"
 
+#include <cstdlib>
+
 #include "cpu/activity.hh"
 #include "cpu/checker/cpu.hh"
 #include "cpu/checker/thread_context.hh"
@@ -56,6 +58,7 @@
 #include "debug/O3CPU.hh"
 #include "debug/Quiesce.hh"
 #include "enums/MemoryMode.hh"
+#include "mem/cache/base.hh"
 #include "sim/cur_tick.hh"
 #include "sim/full_system.hh"
 #include "sim/process.hh"
@@ -447,12 +450,93 @@ CPU::startup()
 {
     BaseCPU::startup();
 
+    // Delay-on-Miss is a run-time gate so the same binary can produce both
+    // the baseline and the DoM arm.
+    domActive = (std::getenv("GEM5_DOM") != nullptr);
+    if (domActive) {
+        domCache = domResolveCache();
+        if (domCache == nullptr) {
+            warn("GEM5_DOM is set but the data port is not bound to a "
+                 "BaseCache; disabling Delay-on-Miss");
+            domActive = false;
+        }
+    }
+
     bac.startupStage();
     fetch.startupStage();
     decode.startupStage();
     iew.startupStage();
     rename.startupStage();
     commit.startupStage();
+}
+
+BaseCache *
+CPU::domResolveCache()
+{
+    if (!domCacheResolved) {
+        domCacheResolved = true;
+        RequestPort *port = dynamic_cast<RequestPort *>(&getDataPort());
+        if (port != nullptr) {
+            auto *cache_port = dynamic_cast<BaseCache::CpuSidePort *>(
+                    port->getResponsePort());
+            if (cache_port != nullptr) {
+                domCache = &cache_port->getCache();
+            }
+        }
+    }
+    return domCache;
+}
+
+void
+CPU::domInsert(const DynInstPtr &inst)
+{
+    DomShadowBuffer &sb = domSb[inst->threadNumber];
+
+    // C-shadow: control flow whose direction or target is not known at
+    // decode.  Direct unconditional jumps are already resolved.
+    if (inst->isControl() &&
+        !(inst->isDirectCtrl() && inst->isUncondCtrl())) {
+        sb.add(inst->seqNum);
+    }
+
+    if (inst->isLoad()) {
+        inst->domCaster = sb.youngestCaster();
+    }
+}
+
+bool
+CPU::domShadowed(const DynInstPtr &inst) const
+{
+    return inst->domCaster != 0 &&
+           domSb[inst->threadNumber].isCasting(inst->domCaster);
+}
+
+bool
+CPU::domCacheHit(Addr paddr, bool is_secure)
+{
+    // Without a cache every access is a miss; treat it as a hit so that a
+    // misconfigured run cannot stall forever.
+    return domCache == nullptr || domCache->inCache(paddr, is_secure);
+}
+
+void
+CPU::domResolve(InstSeqNum seq, ThreadID tid)
+{
+    if (domSb[tid].resolve(seq)) {
+        iew.ldstQueue.releaseShadowed(seq);
+    }
+}
+
+void
+CPU::domRetire(InstSeqNum seq, ThreadID tid)
+{
+    domSb[tid].retire(seq);
+}
+
+void
+CPU::domSquash(InstSeqNum seq, ThreadID tid)
+{
+    domSb[tid].squash(seq);
 }
 
 void

@@ -123,6 +123,19 @@ class DynInst : public ExecContext, public RefCounted
     /** The sequence number of the instruction. */
     InstSeqNum seqNum = 0;
 
+    /**
+     * Delay-on-Miss: sequence number of the youngest shadow-casting
+     * instruction at the time this load was dispatched.  Zero means the load
+     * is not shadowed.
+     */
+    InstSeqNum domCaster = 0;
+
+    /**
+     * Delay-on-Miss: this load probed the L1, missed, and had its request
+     * dropped.  It will be sent when its caster is verified.
+     */
+    bool domDelayed = false;
+
     /** The StaticInst used by this BaseDynInst. */
     const StaticInstPtr staticInst;
 

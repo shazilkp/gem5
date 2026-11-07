@@ -270,6 +270,13 @@ LSQUnit::LSQUnitStats::LSQUnitStats(statistics::Group *parent)
       ADD_STAT(blockedByCache, statistics::units::Count::get(),
                "Number of times an access to memory failed due to the cache "
                "being blocked"),
+      ADD_STAT(domShadowedLoads, statistics::units::Count::get(),
+               "Number of loads executed under an unresolved DoM shadow"),
+      ADD_STAT(domDelayedMisses, statistics::units::Count::get(),
+               "Number of shadowed loads whose L1 probe missed and were "
+               "dropped"),
+      ADD_STAT(domReleased, statistics::units::Count::get(),
+               "Number of delayed loads re-issued after caster verification"),
       ADD_STAT(loadToUse, statistics::units::Cycle::get(),
                "Distribution of cycle latency between the "
                "first time a load is issued and its completion"),
@@ -608,6 +615,37 @@ uint64_t
 LSQUnit::committedSeq() const
 {
     return cpu->committedSeq();
+}
+
+void
+LSQUnit::releaseShadowed(InstSeqNum caster)
+{
+    for (auto &entry : loadQueue) {
+        if (!entry.valid()) {
+            continue;
+        }
+
+        const DynInstPtr &inst = entry.instruction();
+        if (!inst->domDelayed || inst->domCaster != caster) {
+            continue;
+        }
+
+        inst->domDelayed = false;
+        inst->domCaster = 0;
+
+        // The caster was squashed, so this load was squashed too; the LSQ
+        // squash path owns the request.
+        if (inst->isSquashed()) {
+            continue;
+        }
+
+        // Re-issue through the normal load path.  This matters for
+        // correctness: the forwarding checks at the original issue may be
+        // stale by the time the caster is verified, so the load must go
+        // through read() again rather than sending its old packet.
+        ++stats.domReleased;
+        iewStage->retryMemInst(inst);
+    }
 }
 
 Fault
@@ -1630,6 +1668,23 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
     // stores do).
     // @todo We should account for cache port contention
     // and arbitrate between loads and stores.
+
+    // Delay-on-Miss: while the load is under an unresolved shadow, probe the
+    // L1 without side effects.  Hits proceed normally; misses are dropped and
+    // re-issued by releaseShadowed() once the caster is verified.
+    if (load_inst->domDelayed) {
+        return NoFault;
+    }
+    if (cpu->domEnabled() && load_inst->domCaster != 0 &&
+        cpu->domShadowed(load_inst)) {
+        ++stats.domShadowedLoads;
+        const RequestPtr &dom_req = request->mainReq();
+        if (!cpu->domCacheHit(dom_req->getPaddr(), dom_req->isSecure())) {
+            load_inst->domDelayed = true;
+            ++stats.domDelayedMisses;
+            return NoFault;
+        }
+    }
 
     // if we the cache is not blocked, do cache access
     // if the request is not sent and cache is unblocked

@@ -1338,6 +1338,14 @@ IEW::executeInsts()
 
                 ++iewStats.memOrderViolationEvents;
             }
+
+            // Delay-on-Miss: a correctly predicted control instruction is
+            // verified as soon as it executes, so its C-shadow can be lifted
+            // here instead of waiting for commit.
+            if (inst->isControl() && inst->isExecuted() &&
+                !inst->mispredicted() && cpu->domEnabled()) {
+                cpu->domResolve(inst->seqNum, tid);
+            }
         } else {
             // Reset any state associated with redirects that will not
             // be used.

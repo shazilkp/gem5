@@ -921,6 +921,9 @@ class LSQ
 
     RequestPort &getDataPort() { return dcachePort; }
 
+    /** Delay-on-Miss: release loads shadowed by a now-verified caster. */
+    void releaseShadowed(InstSeqNum caster);
+
     void sendRetryResp();
 
   protected:

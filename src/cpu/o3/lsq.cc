@@ -1616,6 +1616,14 @@ LSQ::read(LSQRequest* request, ssize_t load_idx)
     return thread.at(tid).read(request, load_idx);
 }
 
+void
+LSQ::releaseShadowed(InstSeqNum caster)
+{
+    for (auto &unit : thread) {
+        unit.releaseShadowed(caster);
+    }
+}
+
 Fault
 LSQ::write(LSQRequest* request, uint8_t *data, ssize_t store_idx)
 {

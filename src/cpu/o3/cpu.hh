@@ -58,6 +58,7 @@
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/commit.hh"
 #include "cpu/o3/decode.hh"
+#include "cpu/o3/dom.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/fetch.hh"
 #include "cpu/o3/free_list.hh"
@@ -82,6 +83,7 @@ class ThreadContext;
 
 class Checkpoint;
 class Process;
+class BaseCache;
 
 namespace o3
 {
@@ -604,6 +606,41 @@ class CPU : public BaseCPU
         return iew.ldstQueue.getDataPort();
     }
 
+    /**
+     * Delay-on-Miss (ISCA'19) control interface.  The feature is enabled at
+     * run time with GEM5_DOM in the environment so that the same binary can
+     * run the baseline and the DoM arm.
+     */
+    bool domEnabled() const { return domActive; }
+
+    /** Record a newly dispatched instruction in the shadow buffer. */
+    void domInsert(const DynInstPtr &inst);
+
+    /** Is this load still under an unresolved shadow? */
+    bool domShadowed(const DynInstPtr &inst) const;
+
+    /** Side-effect-free L1 tag probe used by the shadowed-miss check. */
+    bool domCacheHit(Addr paddr, bool is_secure);
+
+    /** Verify a caster and release the loads that recorded it. */
+    void domResolve(InstSeqNum seq, ThreadID tid);
+
+    /** Retire a committed instruction from the shadow buffer. */
+    void domRetire(InstSeqNum seq, ThreadID tid);
+
+    /** Discard shadow state younger than a squash point. */
+    void domSquash(InstSeqNum seq, ThreadID tid);
+
+  private:
+    /** Resolve the L1 data cache through the bound data port, once. */
+    BaseCache *domResolveCache();
+
+    bool domActive = false;
+    bool domCacheResolved = false;
+    BaseCache *domCache = nullptr;
+    DomShadowBuffer domSb[MaxThreads];
+
+  public:
     struct CPUStats : public statistics::Group
     {
         CPUStats(CPU *cpu);

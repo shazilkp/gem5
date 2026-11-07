@@ -219,6 +219,10 @@ ROB::insertInst(const DynInstPtr &inst)
 
     inst->setInROB();
 
+    if (cpu->domEnabled()) {
+        cpu->domInsert(inst);
+    }
+
     ++numInstsInROB;
     ++threadEntries[tid];
 
@@ -258,6 +262,10 @@ ROB::retireHead(ThreadID tid)
     } else {
         committedSeq = head_inst->seqNum;
         DomStageAProbe::get().commit(head_inst->seqNum, curTick());
+    }
+
+    if (cpu->domEnabled()) {
+        cpu->domRetire(head_inst->seqNum, tid);
     }
 
     //Update "Global" Head of ROB
@@ -475,6 +483,10 @@ ROB::squash(InstSeqNum squash_num, ThreadID tid)
     }
 
     DPRINTF(ROB, "Starting to squash within the ROB.\n");
+
+    if (cpu->domEnabled()) {
+        cpu->domSquash(squash_num, tid);
+    }
 
     robStatus[tid] = ROBSquashing;
 

@@ -1270,6 +1270,13 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
     if (head_inst->isHtmStart())
         iewStage->setLastRetiredHtmUid(tid, head_inst->getHtmTransactionUid());
 
+    // Fallback for control instructions whose C-shadow was not lifted at
+    // execute (the common path is IEW::executeInsts).  A committed branch has
+    // passed the misprediction check, so releasing here is safe.
+    if (head_inst->isControl() && cpu->domEnabled()) {
+        cpu->domResolve(head_inst->seqNum, tid);
+    }
+
     // Finally clear the head ROB entry.
     rob->retireHead(tid);
 
