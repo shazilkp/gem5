@@ -11,7 +11,7 @@
 
 static uint32_t stream[STREAM];
 static uint32_t cold[COLD];
-static uint32_t x;
+static volatile uint32_t x;
 
 int
 main(void)

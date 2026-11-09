@@ -58,16 +58,45 @@ Branch: `feat/dom`.  Last updated: 2026-11-09.
   forwarding scan and **before** the DoM drop.  A hit fills `memData` and
   schedules a fixed-latency writeback (`GEM5_PROV_LATENCY`, default 1 cycle),
   skipping the memory access; a miss falls through to the normal drop/re-issue.
-- Populated only from committed accesses in `Commit::commitHead`:
-  loads fill the loaded bytes; unmasked stores update the written bytes;
-  masked, atomic, and store-conditional writes invalidate the affected bytes.
-  Uncacheable requests bypass the provider.
+- Populated only from committed accesses in `Commit::commitHead`: loads fill
+  the loaded bytes; unmasked stores fill the **store-queue copy** of the data
+  (`DynInst::memData` is not populated for stores).  Masked, atomic,
+  store-conditional, cache-block-zero/`STORE_NO_DATA`,
+  cache-maintenance, local, uncacheable, cross-word, and otherwise
+  unrepresentable writes invalidate every affected word.  Prefetches do not
+  fill, and non-cacheable/local/maintenance requests are never served.
 - Enable with `GEM5_PROV`; size with `GEM5_PROV_ENTRIES` (default 65536;
   4096 for the 64 KiB arm).  Stats: `domProvHits`, `domProvMisses`,
-  `domProvFills`.
+  `domProvFills`, `domProvFlushes`.
 - Older in-flight stores forward first because the LSQ forwarding scan runs
   before the provider lookup; a faulting/untranslated access never reaches
   `read`.
+- Eviction bug found by the mcf smoke run: a reused provider way kept the
+  previous word's value/mask, so a partial fill could serve stale bytes and
+  the 4K arm aborted mcf with `read error`.  `fill` now clears the entry when
+  it does not already hold the word.  `test_provider.cc` forces a set
+  collision, fills a fifth word partially, and requires the wide lookup to
+  miss; removing the reset makes that test fail.  A provider hit also refuses
+  to bypass an older store whose address is still unresolved or whose data is
+  not yet available.
+- Syscall/DMA coherence: `read`/`write`/`mmap`/`mprotect` can write guest
+  memory without committed stores.  The common `Process::syscall` path (used
+  by every ISA's `EmuLinux::syscall` before the syscall is emulated) calls
+  `BaseCPU::domProviderFlush`, and the RISC-V TLB flushes after a successful
+  page-fault fixup.  This was found by the mcf smoke run: a load filled the
+  input-buffer word, then the kernel's `read()` rewrote it, and without the
+  flush the 4K arm served old text and aborted.
+- Debug aids (env-gated): `GEM5_PROV_CHECK` performs a functional read on
+  each provider hit and panics on a mismatch; `GEM5_PROV_TRACE` records
+  fill/invalidate/flush/lookup-hit events.  The stale mcf hit was found with
+  these.
+- Known limitations:
+  - single-core: only the CPU that takes the syscall/page fault flushes its
+    provider; a multi-CPU configuration would need all providers flushed.
+  - device DMA that does not go through a syscall is not covered; the
+    current L1-only configuration has no such device.
+  - prefetcher side effects on shadowed hits are not deferred (B2 defers the
+    replacement policy only).
 
 ## Tests
 
@@ -85,8 +114,10 @@ provider: all checks passed
   return the load itself.  This is the bug that hung the first B3 run.
 - Mutation checks: never clearing the cast bit aborts the shadow-buffer test;
   ignoring the provider's byte mask aborts the provider test.
-- `test_provider.cc` covers full/partial fills, byte updates, straddling
-  accesses, and round-robin eviction.
+- `test_provider.cc` covers full/partial fills, byte updates, invalidations,
+  straddling accesses, round-robin eviction, **way reuse after eviction**
+  (the stale-mask leak that broke mcf), cross-word invalidation, and
+  **syscall/DMA flush**.
 
 Gem5 tests (hard timeout per run; a hang is a failure):
 
@@ -96,8 +127,9 @@ Gem5 tests (hard timeout per run; a hang is a failure):
 | `run_b2.sh` shadowed hit | deferred 1976, released 997; output equal |
 | `run_e.sh` TLB-thrash E-shadow | E-casters 13531, delayed 2503; output equal |
 | `run_correctness.sh` branchy/squash | outputs equal; 4597/4241 and 14814/14437 delayed/released |
-| `run_provider.sh` provider hit | x=42, y=42; prov hits 49, misses 15879; output equal |
-| `run_provider.sh` provider update | x=99, y=99; prov hits 49, misses 15976; output equal |
+| `run_provider.sh` provider hit | x=42, y=42; prov hits 23560, misses 218; functional check clean |
+| `run_provider.sh` provider update | x=99, y=99; prov hits 2163, misses 223; functional check clean |
+| `run_pagefault.sh` | mmap/unmap/remap output equal; provider check clean |
 | `run_stress.sh` load chain | output equal; IPC ratio 0.996; delayed 517; completes |
 | `run_stress.sh` hit loop | output equal; IPC ratio 0.999; no hit penalty |
 

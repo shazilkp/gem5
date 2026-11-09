@@ -55,6 +55,7 @@
 #include "base/loader/object_file.hh"
 #include "base/loader/symtab.hh"
 #include "base/statistics.hh"
+#include "cpu/base.hh"
 #include "cpu/thread_context.hh"
 #include "mem/page_table.hh"
 #include "mem/se_translating_port_proxy.hh"
@@ -312,6 +313,19 @@ Process::drain()
 {
     fds->updateFileOffsets();
     return DrainState::Drained;
+}
+
+void
+Process::syscall(ThreadContext *tc)
+{
+    numSyscalls++;
+
+    // Syscalls such as read(), write(), mmap() and mprotect() can write guest
+    // memory directly, bypassing committed stores.  Invalidate any
+    // committed-value provider before the emulation runs.
+    if (BaseCPU *cpu = tc->getCpuPtr()) {
+        cpu->domProviderFlush();
+    }
 }
 
 void

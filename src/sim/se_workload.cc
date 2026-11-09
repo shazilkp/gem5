@@ -27,6 +27,7 @@
 
 #include "sim/se_workload.hh"
 
+#include "cpu/base.hh"
 #include "cpu/thread_context.hh"
 #include "params/SEWorkload.hh"
 #include "sim/process.hh"

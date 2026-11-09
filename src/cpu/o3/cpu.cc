@@ -44,6 +44,7 @@
 #include "cpu/o3/cpu.hh"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #include "base/logging.hh"
@@ -52,6 +53,7 @@
 #include "cpu/checker/thread_context.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/limits.hh"
+#include "cpu/o3/lsq_unit.hh"
 #include "cpu/o3/thread_context.hh"
 #include "cpu/simple_thread.hh"
 #include "cpu/thread_context.hh"
@@ -74,6 +76,26 @@ struct BaseCPUParams;
 
 namespace o3
 {
+
+namespace
+{
+
+/** Optional provider fill/invalidate trace, enabled by GEM5_PROV_TRACE. */
+FILE *
+domProviderTrace()
+{
+    static FILE *trace = nullptr;
+    static bool initialized = false;
+    if (!initialized) {
+        initialized = true;
+        if (const char *path = std::getenv("GEM5_PROV_TRACE")) {
+            trace = std::fopen(path, "w");
+        }
+    }
+    return trace;
+}
+
+} // anonymous namespace
 
 CPU::CPU(const BaseO3CPUParams &params)
     : BaseCPU(params),
@@ -366,7 +388,9 @@ CPU::CPUStats::CPUStats(CPU *cpu)
       ADD_STAT(domProvMisses, statistics::units::Count::get(),
                "DoM provider lookups that could not supply the value"),
       ADD_STAT(domProvFills, statistics::units::Count::get(),
-               "DoM provider committed fills/updates")
+               "DoM provider committed fills/updates"),
+      ADD_STAT(domProvFlushes, statistics::units::Count::get(),
+               "DoM provider flushes after syscall/DMA writes")
 {
     // Register any of the O3CPU's stats here.
     timesIdled
@@ -491,9 +515,11 @@ CPU::startup()
             domProvLatency = std::strtoul(env, nullptr, 10);
         }
 
-        inform("DoM provider: %zu entries (%zu sets x %zu ways), "
-               "fixed latency %u cycles", entries, domProv->setCount(),
-               ways, domProvLatency);
+        inform("DoM provider: %llu entries (%llu sets x %u ways), "
+               "fixed latency %u cycles",
+               (unsigned long long)entries,
+               (unsigned long long)domProv->setCount(),
+               DomValueProvider::Ways, domProvLatency);
     }
 
     bac.startupStage();
@@ -613,14 +639,27 @@ CPU::domProviderLookup(const RequestPtr &req, uint8_t *dst)
         return false;
     }
 
-    // Uncacheable accesses must always reach the device.
-    if (req->isUncacheable()) {
+    if (FILE *trace = domProviderTrace()) {
+        std::fprintf(trace, "Q %llu %#llx %u\n",
+                     (unsigned long long)req->domSeq(),
+                     (unsigned long long)req->getPaddr(), req->getSize());
+    }
+
+    // Uncacheable, local (MMIO/IPR), and cache-maintenance requests must
+    // always reach the device/cache and must never be served from the table.
+    if (req->isUncacheable() || req->isLocalAccess() ||
+        req->isCacheMaintenance()) {
         ++cpuStats.domProvMisses;
         return false;
     }
 
     if (domProv->lookup(req->getPaddr(), req->getSize(), dst)) {
         ++cpuStats.domProvHits;
+        if (FILE *trace = domProviderTrace()) {
+            std::fprintf(trace, "H %llu %#llx %u\n",
+                         (unsigned long long)req->domSeq(),
+                         (unsigned long long)req->getPaddr(), req->getSize());
+        }
         return true;
     }
 
@@ -638,10 +677,35 @@ CPU::domProviderCommit(const DynInstPtr &inst)
         return;
     }
 
+    RequestPtr req;
+    if (inst->savedRequest != nullptr) {
+        req = inst->savedRequest->mainReq();
+    }
+
+    const bool unsupported = req != nullptr &&
+        (req->isUncacheable() || req->isLocalAccess() ||
+         req->isCacheMaintenance());
+    const bool no_data = req != nullptr &&
+        (req->getFlags() & Request::STORE_NO_DATA);
+
     if (inst->isLoad()) {
+        // Prefetches do not produce a committed architectural load, and
+        // uncacheable/local/maintenance requests are not cacheable values.
+        if (inst->isDataPrefetch() || inst->isInstPrefetch() || unsupported) {
+            return;
+        }
         if (inst->memData != nullptr) {
             domProv->fill(inst->physEffAddr, inst->memData, inst->effSize);
             ++cpuStats.domProvFills;
+            if (FILE *trace = domProviderTrace()) {
+                uint64_t value = 0;
+                std::memcpy(&value, inst->memData,
+                            std::min<unsigned>(inst->effSize, 8));
+                std::fprintf(trace, "L %llu %#llx %u %016llx\n",
+                             (unsigned long long)inst->seqNum,
+                             (unsigned long long)inst->physEffAddr,
+                             inst->effSize, (unsigned long long)value);
+            }
         }
         return;
     }
@@ -650,21 +714,60 @@ CPU::domProviderCommit(const DynInstPtr &inst)
         return;
     }
 
-    // Atomics, store-conditionals, and masked stores cannot always supply
-    // exact bytes for the whole access; invalidate rather than risk a stale
-    // committed value.
-    const bool masked = inst->savedRequest != nullptr &&
-        inst->savedRequest->mainReq() != nullptr &&
-        inst->savedRequest->mainReq()->isMasked();
+    // The architectural store data is the copy in the store queue;
+    // DynInst::memData is not populated for stores.
+    LSQUnit &store_unit = iew.ldstQueue.getLSQUnit(inst->threadNumber);
+    const auto &store_entry = store_unit.storeQueue[inst->sqIdx];
 
-    if (inst->isAtomic() || inst->isStoreConditional() || masked ||
-        inst->memData == nullptr) {
-        domProv->invalidate(inst->physEffAddr, inst->effSize);
+    const bool masked = req != nullptr && req->isMasked();
+    const unsigned store_size = store_entry.valid() ? store_entry.size() : 0;
+
+    const bool unrepresentable =
+        store_size > sizeof(uint64_t) ||
+        ((inst->physEffAddr & (sizeof(uint64_t) - 1)) + store_size >
+         sizeof(uint64_t));
+
+    if (unsupported || no_data || inst->isAtomic() ||
+        inst->isStoreConditional() || masked || !store_entry.valid() ||
+        store_size == 0 || store_size != inst->effSize ||
+        store_entry.isAllZeros() || unrepresentable) {
+        // No single exact entry can describe this write.  Drop every word it
+        // touches rather than leaving a stale committed value behind.
+        domProv->invalidateRange(inst->physEffAddr, inst->effSize);
+        if (FILE *trace = domProviderTrace()) {
+            std::fprintf(trace, "I %llu %#llx %u\n",
+                         (unsigned long long)inst->seqNum,
+                         (unsigned long long)inst->physEffAddr,
+                         inst->effSize);
+        }
         return;
     }
 
-    domProv->fill(inst->physEffAddr, inst->memData, inst->effSize);
+    domProv->fill(inst->physEffAddr,
+                  reinterpret_cast<const uint8_t *>(store_entry.data()),
+                  store_size);
     ++cpuStats.domProvFills;
+    if (FILE *trace = domProviderTrace()) {
+        uint64_t value = 0;
+        std::memcpy(&value, store_entry.data(),
+                    std::min<unsigned>(store_size, 8));
+        std::fprintf(trace, "S %llu %#llx %u %016llx\n",
+                     (unsigned long long)inst->seqNum,
+                     (unsigned long long)inst->physEffAddr,
+                     inst->effSize, (unsigned long long)value);
+    }
+}
+
+void
+CPU::domProviderFlush()
+{
+    if (domProvActive && domProv != nullptr) {
+        domProv->flush();
+        ++cpuStats.domProvFlushes;
+        if (FILE *trace = domProviderTrace()) {
+            std::fprintf(trace, "X\n");
+        }
+    }
 }
 
 void

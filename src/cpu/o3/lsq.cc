@@ -1636,6 +1636,12 @@ LSQ::releaseShadowed(InstSeqNum caster)
     }
 }
 
+LSQUnit &
+LSQ::getLSQUnit(ThreadID tid)
+{
+    return thread.at(tid);
+}
+
 Fault
 LSQ::write(LSQRequest* request, uint8_t *data, ssize_t store_idx)
 {

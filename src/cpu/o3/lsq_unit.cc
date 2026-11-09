@@ -41,6 +41,9 @@
 
 #include "cpu/o3/lsq_unit.hh"
 
+#include <cstdlib>
+#include <cstring>
+
 #include "arch/generic/debugfaults.hh"
 #include "base/logging.hh"
 #include "base/str.hh"
@@ -1690,11 +1693,73 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
         ++stats.domShadowedLoads;
         const RequestPtr &dom_req = request->mainReq();
         if (!cpu->domCacheHit(dom_req->getPaddr(), dom_req->isSecure())) {
+            // A provider hit must not bypass an older store whose address is
+            // not yet known: that store may change this word.  In that case
+            // fall through to the DoM drop; the re-issued load (with no
+            // caster) takes the normal path once the store has resolved.
+            bool older_store_unresolved = false;
+            const Addr load_block =
+                request->mainReq()->getVaddr() & cacheBlockMask;
+            auto store_it = load_inst->sqIt;
+            while (store_it != storeWBIt) {
+                store_it--;
+                const DynInstPtr &older = store_it->instruction();
+                if (!older->effAddrValid()) {
+                    // The store address is unknown; it could alias.
+                    older_store_unresolved = true;
+                    break;
+                }
+                if (store_it->size() == 0) {
+                    // Unexecuted store: its data is not available, but an
+                    // access in a different block cannot touch this word.
+                    if ((older->effAddr & cacheBlockMask) == load_block) {
+                        older_store_unresolved = true;
+                        break;
+                    }
+                    continue;
+                }
+                if ((older->isAtomic() || older->isStoreConditional()) &&
+                    !store_it->completed() &&
+                    (older->effAddr & cacheBlockMask) == load_block) {
+                    // Final atomic/SC effects are not ready in this block.
+                    older_store_unresolved = true;
+                    break;
+                }
+            }
+
             // The exact committed-value provider is queried before the
             // shadowed miss is dropped.  A hit supplies the bytes with a
             // fixed latency and skips the memory access entirely.
-            if (cpu->domProviderEnabled() &&
+            if (!older_store_unresolved &&
+                !load_inst->isDataPrefetch() &&
+                !load_inst->isInstPrefetch() &&
+                cpu->domProviderEnabled() &&
                 cpu->domProviderLookup(dom_req, load_inst->memData)) {
+                if (std::getenv("GEM5_PROV_CHECK")) {
+                    RequestPtr check_req = std::make_shared<Request>(
+                        dom_req->getPaddr(), dom_req->getSize(),
+                        Request::PHYSICAL, 0);
+                    PacketPtr check_pkt = new Packet(check_req,
+                                                     MemCmd::ReadReq);
+                    uint8_t ref[8] = {};
+                    check_pkt->dataStatic(ref);
+                    dcachePort->sendFunctional(check_pkt);
+                    delete check_pkt;
+
+                    uint64_t prov = 0;
+                    uint64_t actual = 0;
+                    std::memcpy(&prov, load_inst->memData,
+                                dom_req->getSize());
+                    std::memcpy(&actual, ref, dom_req->getSize());
+                    panic_if(std::memcmp(ref, load_inst->memData,
+                                         dom_req->getSize()) != 0,
+                             "DoM provider stale: load sn %llu addr %#llx "
+                             "size %u prov %016llx ref %016llx caster %llu",
+                             load_inst->seqNum, dom_req->getPaddr(),
+                             dom_req->getSize(), prov, actual,
+                             load_inst->domCaster);
+                }
+
                 PacketPtr data_pkt = new Packet(dom_req, MemCmd::ReadReq);
                 data_pkt->dataStatic(load_inst->memData);
                 WritebackEvent *wb = new WritebackEvent(load_inst, data_pkt,

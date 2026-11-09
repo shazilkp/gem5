@@ -127,10 +127,12 @@ class DomValueProvider
         const std::size_t set = word % sets;
 
         Entry *entry = nullptr;
+        bool existing = false;
         for (unsigned way = 0; way < Ways; way++) {
             Entry &candidate = table[set * Ways + way];
             if (candidate.valid && candidate.tag == word) {
                 entry = &candidate;
+                existing = true;
                 break;
             }
         }
@@ -146,6 +148,15 @@ class DomValueProvider
         if (entry == nullptr) {
             entry = &table[set * Ways + nextWay[set]];
             nextWay[set] = (nextWay[set] + 1) % Ways;
+        }
+
+        // A reused way must not contribute the evicted word's bytes.  Only
+        // an entry that already holds this word may merge with old bytes.
+        if (!existing) {
+            entry->valid = true;
+            entry->tag = word;
+            entry->value = 0;
+            entry->mask = 0;
         }
 
         uint64_t value = 0;
@@ -192,6 +203,42 @@ class DomValueProvider
             }
             return;
         }
+    }
+
+    /**
+     * Forget every word touched by [paddr, paddr+size).  Stores that cross a
+     * word boundary (or are wider than one) have no single exact entry, so
+     * all affected words must be dropped instead of left stale.
+     */
+    void
+    invalidateRange(Addr paddr, unsigned size)
+    {
+        Addr addr = paddr;
+        unsigned remaining = size;
+        while (remaining > 0) {
+            const unsigned offset = addr & 7;
+            const unsigned chunk = std::min<unsigned>(
+                remaining, sizeof(uint64_t) - offset);
+            invalidate(addr, chunk);
+            addr += chunk;
+            remaining -= chunk;
+        }
+    }
+
+    /**
+     * Forget every committed entry.  Syscalls (read/write/mmap) can write
+     * guest memory directly, bypassing committed stores, so a provider must
+     * be flushed at the syscall boundary.
+     */
+    void
+    flush()
+    {
+        for (auto &entry : table) {
+            entry.valid = false;
+            entry.value = 0;
+            entry.mask = 0;
+        }
+        std::fill(nextWay.begin(), nextWay.end(), 0);
     }
 
     std::size_t

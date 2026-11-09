@@ -46,6 +46,7 @@
 #include "base/inifile.hh"
 #include "base/str.hh"
 #include "base/trace.hh"
+#include "cpu/base.hh"
 #include "cpu/thread_context.hh"
 #include "debug/TLB.hh"
 #include "debug/TLBVerbose.hh"
@@ -666,6 +667,11 @@ TLB::translateFunctional(const RequestPtr &req, ThreadContext *tc,
         if (!pte && mode != BaseMMU::Execute) {
             // Check if we just need to grow the stack.
             if (process->fixupFault(vaddr)) {
+                // Fault handling may have mapped and zeroed a physical page
+                // without a committed store.  Invalidate any committed-value
+                // provider before using the new mapping.
+                tc->getCpuPtr()->domProviderFlush();
+
                 // If we did, lookup the entry for the new page.
                 pte = process->pTable->lookup(vaddr);
             }

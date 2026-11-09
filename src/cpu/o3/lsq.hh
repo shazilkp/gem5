@@ -921,6 +921,9 @@ class LSQ
 
     RequestPort &getDataPort() { return dcachePort; }
 
+    /** Per-thread LSQ unit (used for Delay-on-Miss store-data lookup). */
+    LSQUnit &getLSQUnit(ThreadID tid);
+
     /** Delay-on-Miss: release loads shadowed by a now-verified caster. */
     void releaseShadowed(InstSeqNum caster);
 

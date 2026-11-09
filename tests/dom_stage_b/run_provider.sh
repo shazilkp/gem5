@@ -27,7 +27,7 @@ run_one() {
 for prog in provider_hit provider_update; do
     riscv64-linux-gnu-gcc -O1 -static -o "$PROGS/$prog" "$PROGS/$prog.c"
     run_one "$prog" base ""
-    run_one "$prog" dom "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=65536"
+    run_one "$prog" dom "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=65536 GEM5_PROV_CHECK=1"
     python3 "$ROOT/tests/dom_stage_b/check_provider.py" \
         "$OUT/${prog}_base" "$OUT/${prog}_dom"
 done

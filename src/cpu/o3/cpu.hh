@@ -645,6 +645,9 @@ class CPU : public BaseCPU
     /** Populate or update the provider from a committed access. */
     void domProviderCommit(const DynInstPtr &inst);
 
+    /** Invalidate the provider after a syscall/DMA write. */
+    void domProviderFlush() override;
+
   private:
     /** Resolve the L1 data cache through the bound data port, once. */
     BaseCache *domResolveCache();
@@ -681,6 +684,8 @@ class CPU : public BaseCPU
         statistics::Scalar domProvMisses;
         /** Delay-on-Miss provider: committed fills/updates. */
         statistics::Scalar domProvFills;
+        /** Delay-on-Miss provider: syscall/DMA flushes. */
+        statistics::Scalar domProvFlushes;
     } cpuStats;
 
   public:

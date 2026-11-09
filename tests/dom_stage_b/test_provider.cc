@@ -65,6 +65,37 @@ main()
     provider.invalidate(0x5002, 6);
     assert(!provider.lookup(0x5002, 4, reinterpret_cast<uint8_t *>(&tail)));
 
+    // A syscall/DMA flush drops every committed entry.
+    provider.fill(0x7000, reinterpret_cast<const uint8_t *>(&word), 8);
+    assert(provider.lookup(0x7000, 8, reinterpret_cast<uint8_t *>(&out)));
+    provider.flush();
+    assert(!provider.lookup(0x7000, 8, reinterpret_cast<uint8_t *>(&out)));
+
+    // A store that crosses a word boundary invalidates every touched word.
+    provider.fill(0x6000, reinterpret_cast<const uint8_t *>(&word), 8);
+    provider.fill(0x6008, reinterpret_cast<const uint8_t *>(&word), 8);
+    provider.invalidateRange(0x6004, 8);
+    assert(!provider.lookup(0x6000, 8, reinterpret_cast<uint8_t *>(&out)));
+    assert(provider.lookup(0x6000, 4, reinterpret_cast<uint8_t *>(&half)));
+    assert(!provider.lookup(0x6008, 8, reinterpret_cast<uint8_t *>(&out)));
+    assert(provider.lookup(0x600c, 4, reinterpret_cast<uint8_t *>(&half)));
+
+    // A reused way must not leak the evicted word's byte mask.  Fill four
+    // words in one set, then reuse a way for a fifth word with a partial
+    // write: a wider lookup of the fifth word must miss.
+    DomValueProvider ev(16);   // 4 sets x 4 ways
+    for (int i = 0; i < 4; i++) {
+        ev.fill(static_cast<gem5::Addr>(i) * 4 * 8,
+                reinterpret_cast<const uint8_t *>(&word), 8);
+    }
+    const uint32_t partial = 0xdeadbeef;
+    ev.fill(16 * 8, reinterpret_cast<const uint8_t *>(&partial), 4);
+    uint64_t wide = 0;
+    assert(!ev.lookup(16 * 8, 8, reinterpret_cast<uint8_t *>(&wide)));
+    uint32_t narrow = 0;
+    assert(ev.lookup(16 * 8, 4, reinterpret_cast<uint8_t *>(&narrow)));
+    assert(narrow == partial);
+
     // Round-robin eviction remains functional.
     for (int i = 0; i < 1000; i++) {
         provider.fill(0x8000 + i * 8,

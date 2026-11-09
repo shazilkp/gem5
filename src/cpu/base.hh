@@ -202,6 +202,12 @@ class BaseCPU : public ClockedObject
     virtual Port &getDataPort() = 0;
 
     /**
+     * Delay-on-Miss hook: a syscall may have written guest memory without a
+     * committed store, so any committed-value provider must be invalidated.
+     */
+    virtual void domProviderFlush() {}
+
+    /**
      * Purely virtual method that returns a reference to the instruction
      * port. All subclasses must implement this method.
      *

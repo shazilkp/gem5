@@ -75,12 +75,13 @@ try:
             if len(parts) < 2:
                 continue
             key = parts[0]
-            if key in ("system.cpu.commitStats0.ipc",
-                       "system.cpu.commitStats0.numInsts",
-                       "system.cpu.numCycles",
-                       "system.cpu.dcache.demandMisses",
-                       "system.cpu.dcache.demandHits"):
-                values[key] = float(parts[1])
+            root = key.split("::", 1)[0]
+            if root in ("system.cpu.commitStats0.ipc",
+                        "system.cpu.commitStats0.numInsts",
+                        "system.cpu.numCycles",
+                        "system.cpu.dcache.demandMisses",
+                        "system.cpu.dcache.demandHits"):
+                values[root] = float(parts[1])
             if key.endswith(".domProvHits"):
                 values["domProvHits"] = values.get("domProvHits", 0.0) + float(parts[1])
             if key.endswith(".domDelayedMisses"):
