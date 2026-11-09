@@ -4,6 +4,12 @@
 # usage:
 #   run_spec_all.sh [maxinsts]
 #
+# Environment:
+#   SPEC=/path/to/benchspec/CPU
+#   RUN=run_base_refrate_riscv.0000   (default: test run dir)
+#   PRIMARY_ONLY=1                    (skip out-of-scope 65K/1 MiB arms)
+#   DOM_OUT=/results/dir              (default: /tmp/opencode/dom_stage_b)
+#
 # The list below matches the workloads used by the Stage A characterization.
 # Missing run directories are skipped so the same script works locally and on
 # the server.
@@ -11,8 +17,8 @@ set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
 SPEC=${SPEC:-$HOME/cpu2017/benchspec/CPU}
-MAX=${1:-50000000}
-RUN=run_base_test_riscv.0000
+MAX=${1:-${MAX:-50000000}}
+RUN=${RUN:-run_base_test_riscv.0000}
 
 run_one() {
     local bench=$1 bin=$2 opts=$3

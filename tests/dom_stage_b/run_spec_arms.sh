@@ -127,7 +127,9 @@ run_arm base_l2_64k "" "--l2cache --l2_size=64KiB"
 
 # Out-of-scope sensitivity only.  A 65K provider (~1 MiB) is larger than the
 # L1 and is not a valid design point; these rows must not be used as a
-# research signal or headline comparison.
-run_arm dom_prov65k "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=65536" ""
-run_arm dom_l1_1m "GEM5_DOM=1" "--l1d_size=1MiB"
-run_arm base_l1_1m "" "--l1d_size=1MiB"
+# research signal or headline comparison.  Set PRIMARY_ONLY=1 to skip them.
+if [ "${PRIMARY_ONLY:-0}" != "1" ]; then
+    run_arm dom_prov65k "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=65536" ""
+    run_arm dom_l1_1m "GEM5_DOM=1" "--l1d_size=1MiB"
+    run_arm base_l1_1m "" "--l1d_size=1MiB"
+fi
