@@ -39,6 +39,10 @@ class ShadowCache(SimObject):
     Attach the same instance to both the O3 CPU and its private L1-D.  The
     cache fills this and the CPU releases from it, so they must share one
     object.
+
+    Non-secure memory only: the entry key has no secure bit, and a secure
+    speculative fill is a fatal configuration error.  SPACESPEC_SERVE=0
+    disables the Layer 3 shadow-hit serve for A/B measurement.
     """
 
     type = "ShadowCache"

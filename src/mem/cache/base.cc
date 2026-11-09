@@ -515,7 +515,8 @@ BaseCache::recvTimingReq(PacketPtr pkt)
     // outlive the owner: any squash that removes the owner removes every
     // younger instruction in the thread, so the served access is squashed
     // too and its timing cannot be observed afterwards.
-    if (!satisfied && shadowCache && pkt->req->isShadowFill() &&
+    if (!satisfied && shadowCache && shadowCache->serveEnabled() &&
+        pkt->req->isShadowFill() && !pkt->isSecure() &&
         pkt->isRead() && !pkt->isWrite() && !pkt->req->isUncacheable() &&
         !pkt->isLLSC() && !pkt->isLockedRMW() && !pkt->isAtomicOp() &&
         pkt->needsResponse()) {
@@ -675,6 +676,18 @@ BaseCache::recvTimingResp(PacketPtr pkt)
     // is called out rather than papered over: such a line is by definition
     // being written by an in-flight store, so it is not a secret-dependent
     // line, but that argument is not proven.
+    // SpaceSpec is a non-secure-memory mechanism: the shadow key does not
+    // carry a secure bit, and promotion installs a non-secure block.  A
+    // secure speculative fill cannot be protected correctly, so forbid the
+    // configuration rather than silently installing it in the L1-D.
+    if (shadowCache && shadowCache->interceptEnabled() && is_fill &&
+        !is_error && pkt->req->isShadowFill() && pkt->isRead() &&
+        pkt->hasData() && inRange(pkt->getBlockAddr(blkSize)) &&
+        pkt->isSecure()) {
+        fatal("%s: SpaceSpec does not support secure memory; run with "
+              "secure memory disabled", name());
+    }
+
     const bool shadowFill = shadowCache && shadowCache->interceptEnabled() &&
                             is_fill && !is_error &&
                             pkt->req->isShadowFill() && pkt->isRead() &&
@@ -1441,7 +1454,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
     // if the owner is squashed, the consumer is squashed with it, so the
     // hit cannot survive as an oracle.
     if (shadowCache && shadowCache->interceptEnabled() &&
-        pkt->req->isShadowFill() &&
+        pkt->req->isShadowFill() && !pkt->isSecure() &&
         pkt->isRead() && !pkt->isWrite() &&
         (!blk || !blk->isValid())) {
         shadowCache->missWouldHit(pkt->getBlockAddr(blkSize),
@@ -1860,6 +1873,8 @@ BaseCache::promoteFromShadow(Addr line_addr, const std::uint8_t *data)
 
     // Already resident: something installed it in the meantime (a store, or a
     // fill that was not diverted). Leave the newer copy alone.
+    // SpaceSpec rejects secure captures in recvTimingResp; a held entry is
+    // therefore always non-secure.
     if (tags->findBlock({line_addr, /*is_secure=*/false})) {
         DPRINTF(SpaceSpec,
                 "%s: not promoting %#x, already resident\n", name(),

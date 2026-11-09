@@ -64,8 +64,8 @@ A layer is done only when:
 |---|---|---|
 | 0 | shadow buffer: ownership, lifetime, overflow | implemented, 29 unit tests |
 | 1 | L1-D capture + wait-for-commit promotion | implemented, 5/5 equivalence, 2 attacks |
-| 2 | write / atomic / split / SMT correctness | partial: `setDirty` fixed, others open |
-| 3 | shadow-hit serve + request merge | not started (`lookup()` is dead code) |
+| 2 | write / atomic / split / SMT correctness | mostly done: writes/atomics/LL-SC, split, per-thread release; secure forbidden; full SMT and snoop open |
+| 3 | shadow-hit serve + request merge | implemented: serve, safe/unsafe split, serve gate, directed harness; 4-cycle policy |
 | 4 | cache hierarchy (L2/L3) | not started; only valid today because SE has no L2 |
 | 5 | instruction cache + TLB shadows | not started |
 | 6 | coherence / multicore / TSO | out of scope in the paper; needed for full-system |
@@ -185,8 +185,14 @@ leaves the shadow and the cache in a coherent, non-stale state.
 | output equivalence including all of the above | E |
 | `spaceSpecDirtyPromoted == 0` on a clean run | C |
 
-**Current status.** `setDirty()` fixes I2.1–I2.3 for the paths that call it;
-split loads (I2.4), SMT (I2.6), secure (I2.5) and snoops (I2.7) remain open.
+**Current status (frontier).** `setDirty()` and the later write/atomic/LL-SC
+drop hook cover I2.1–I2.3; split loads are covered by `promoteAll()` (I2.4);
+per-thread release is covered by the thread tag and the interleaved unit tests
+(I2.6 at the structure level).  Secure memory (I2.5) is **forbidden**: the
+shadow key has no secure bit, so a secure speculative fill is a fatal
+configuration error rather than a silently unprotected line.  Snoop/invalidate
+(I2.7) is Layer 6.  A full SMT run is still a coverage gap; the per-thread
+contract is unit-tested, not simulated with two hardware threads.
 
 **Exit criteria.** Every test above has a red run on the pre-fix code and a green
 run after. The audit's four correctness bugs are the seed tests.
@@ -220,9 +226,23 @@ held line share one request.
 | output equivalence | E |
 | refresh count drops vs Layer 1 | P |
 
-**Instrumentation prerequisite.** A counter for "L1-D miss that hits a shadow
-entry" — the number of loads that *would* have hit L1. `lookupHits` today is 0
-because nothing calls `lookup()`. Do not implement before measuring this.
+**Instrumentation prerequisite (done).** The held-line miss counter classifies
+safe (same thread, younger) versus unsafe (older or another thread); the
+pressure harness reported 2.8%.  `lookupHits` now counts serves through
+`lineForConsumer`, not the unused generic `lookup()`.
+
+**Status (frontier).** Implemented and measured:
+
+- serve is same-thread and strictly younger (`isServable`/`lineForConsumer`);
+- `SPACESPEC_SERVE=0` gates the serve for the A/B;
+- fixed **4-cycle** serve latency, a deliberate timing-channel policy;
+- the serve returns before `handleTimingReqMiss`, so no MSHR is allocated;
+- `spacespec_shadowhit`: 61 serves, 61 safe, 0 unsafe, serve-off output
+  byte-identical, 12 MSHR misses avoided, refreshes 0 (serve) vs 2 (off);
+- the security attacks still show 463/206 serves with zero unsafe misses.
+
+The unused `lookup()` remains as a diagnostic; the production serve path is
+`lineForConsumer()`.
 
 **Exit criteria.** The measured counter justifies the layer, all tests pass, and
 the latency policy is stated in the design doc.
@@ -414,17 +434,19 @@ These are built once and used by every layer.
 
 - Layers 0 and 1 are implemented and have evidence. **Re-run the mutation checks**
   before treating them as frozen.
-- Layer 2 is partially done (`setDirty`); the split-load, SMT, secure and snoop
-  tests do not exist yet. This is the next coding layer.
-- Layer 3 is blocked on one measurement: how many L1-D misses hit a shadow
-  entry. Add that counter; do not implement hit-serve until it says the benefit
-  is real.
-- Layer 4 is the first layer that requires a deliberate decision: either keep
-  the no-L2 constraint and document it, or implement the paper's non-allocating
-  / filter mechanism. Do not add an L2 and call the result SafeSpec without one
-  of those.
+- Layer 2 is mostly done: writes/atomics/LL-SC, split loads, and per-thread
+  release are in.  Secure memory is forbidden by a fatal (the shadow key has no
+  secure bit), the per-thread contract is unit-tested but a full SMT run is
+  still a gap, and snoop/invalidate is Layer 6.
+- Layer 3 is implemented and measured: same-thread younger serve, safe/unsafe
+  classification, the `SPACESPEC_SERVE=0` A/B, a fixed 4-cycle policy, no MSHR
+  on the serve path, and the `spacespec_shadowhit` directed harness.
+- Layer 4 is now the next layer that requires a deliberate decision: either keep
+  the no-L2 constraint and document it, or implement the paper's
+  non-allocating/filter mechanism. Do not add an L2 and call the result SafeSpec
+  without one of those.
 - Layer 5 is where the paper's scope is broader than the current code; it is a
-  natural follow-on after 2, not after 4.
+  natural follow-on after Layer 4.
 
 **Do not skip the red runs.** The value of this plan is not the layer list; it
 is that every layer has a test that was shown to fail for the right reason before

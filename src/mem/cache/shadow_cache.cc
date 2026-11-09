@@ -49,12 +49,16 @@ ShadowCache::ShadowCache(const Params &p)
     promote_ = envFlag("SPACESPEC_PROMOTE");
     divert_ = envFlag("SPACESPEC_DIVERT");
     store_hooks_ = envFlag("SPACESPEC_STORES");
+    serve_ = envFlag("SPACESPEC_SERVE");
 
     if (!intercept_ || !promote_ || !divert_ || !store_hooks_) {
         warn("%s: bisection gate active -- intercept=%d promote=%d divert=%d "
              "stores=%d. This is NOT a working configuration; it exists to "
              "attribute a failure.", name(), (int)intercept_, (int)promote_,
              (int)divert_, (int)store_hooks_);
+    }
+    if (!serve_) {
+        inform("%s: shadow serve disabled (Layer 3 A/B)", name());
     }
 }
 
@@ -128,6 +132,9 @@ bool
 ShadowCache::lookup(std::uint64_t addr, unsigned offset,
                     std::uint8_t *dst, std::size_t len)
 {
+    if (!serve_) {
+        return false;
+    }
     const bool hit = buffer_.lookup(addr, offset, dst, len);
     const auto &s = buffer_.stats();
     stats.lookupHits = s.lookupHits;
@@ -143,6 +150,9 @@ ShadowCache::lineForConsumer(std::uint64_t addr, std::uint64_t consumerSeq,
                              std::uint32_t tid,
                              std::vector<std::uint8_t> &out)
 {
+    if (!serve_) {
+        return false;
+    }
     const bool hit = buffer_.lineForConsumer(addr, consumerSeq, tid, out);
     const auto &s = buffer_.stats();
     stats.lookupHits = s.lookupHits;

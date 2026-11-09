@@ -227,6 +227,18 @@ class ShadowCache : public SimObject
      */
     bool storeHooksEnabled() const { return store_hooks_; }
 
+    /**
+     * Should a younger same-thread consumer be served from the shadow?
+     *
+     * The serve is an optimisation, not part of the security boundary: with
+     * it off the line is still withheld from the cache, but the consumer
+     * re-fetches and the shadow entry is refreshed.  This gate exists so the
+     * Layer 3 A/B can measure the re-fetch/refresh cost of not serving.
+     *
+     * SPACESPEC_SERVE=0 disables it.
+     */
+    bool serveEnabled() const { return serve_; }
+
     /** True if a line is currently held. */
     bool holds(std::uint64_t addr) const { return buffer_.holds(addr); }
 
@@ -253,6 +265,9 @@ class ShadowCache : public SimObject
 
     /** Bisection gate: let stores invalidate shadow and promoted lines. */
     bool store_hooks_ = true;
+
+    /** Optimisation gate: serve younger same-thread consumers from the shadow. */
+    bool serve_ = true;
 
     struct ShadowStats : public statistics::Group
     {

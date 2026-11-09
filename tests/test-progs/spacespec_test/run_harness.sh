@@ -46,7 +46,7 @@ fi
 mkdir -p "$BUILD" "$OUTDIR"
 
 # Build every test program.
-TESTS="store pressure atomic chain deferred split"
+TESTS="store pressure atomic chain deferred split shadowhit"
 echo "== building test programs =="
 for t in $TESTS; do
     if riscv64-linux-gnu-gcc -static -O2 -o "$BUILD/spacespec_$t" \
@@ -84,8 +84,15 @@ failed_tests=" "
 echo
 echo "== output equivalence (baseline vs SpaceSpec) =="
 for t in $TESTS; do
-    base=$(run_one "$BUILD/spacespec_$t" "$SE" "${t}_base")
-    space=$(run_one "$BUILD/spacespec_$t" "$CONFIG" "${t}_space")
+    if [ "$t" = shadowhit ]; then
+        # The LVP can hide the measured misses; Layer 3 is independent of it.
+        base=$(SPACESPEC_LVP=0 run_one "$BUILD/spacespec_$t" "$SE" "${t}_base")
+        space=$(SPACESPEC_LVP=0 run_one "$BUILD/spacespec_$t" "$CONFIG" \
+                "${t}_space")
+    else
+        base=$(run_one "$BUILD/spacespec_$t" "$SE" "${t}_base")
+        space=$(run_one "$BUILD/spacespec_$t" "$CONFIG" "${t}_space")
+    fi
 
     if [ -z "$base" ] || [ -z "$space" ]; then
         printf "  %-10s FAIL   (no result: crash or timeout)\n" "$t"
@@ -124,6 +131,72 @@ for t in $TESTS; do
         printf "  %-10s ok\n" "$t"
     fi
 done
+
+echo
+echo "== Layer 3: shadow-hit serve / no-MSHR / merge =="
+
+shadow_stat() {
+    local tag=$1 key=$2
+    awk -v key="$key" '$1 ~ key {s+=$2} END{print s+0}' \
+        "$OUTDIR/$tag/stats.txt" 2>/dev/null
+}
+
+noserve=$(SPACESPEC_LVP=0 SPACESPEC_SERVE=0 run_one \
+          "$BUILD/spacespec_shadowhit" "$CONFIG" "shadowhit_noserve")
+space_line=$(grep -E '^spacespec_shadowhit done' \
+             "$OUTDIR/shadowhit_space.console" 2>/dev/null)
+noserve_line=$(grep -E '^spacespec_shadowhit done' \
+               "$OUTDIR/shadowhit_noserve.console" 2>/dev/null)
+
+if [ -z "$noserve_line" ]; then
+    printf "  serve-off      FAIL   (no result)\n"
+    fail=$((fail+1))
+elif [ "$space_line" != "$noserve_line" ]; then
+    printf "  serve-off      MISMATCH\n"
+    fail=$((fail+1))
+else
+    printf "  serve-off      PASS   (output unchanged)\n"
+fi
+
+hits=$(shadow_stat shadowhit_space 'shadow_cache\.lookupHits$')
+safe=$(shadow_stat shadowhit_space 'shadow_cache\.safeShadowHits$')
+unsafe=$(shadow_stat shadowhit_space 'shadow_cache\.unsafeShadowHits$')
+refresh=$(shadow_stat shadowhit_space 'shadow_cache\.refreshes$')
+mshr=$(shadow_stat shadowhit_space 'dcache\.demandMshrMisses::total$')
+refresh_off=$(shadow_stat shadowhit_noserve 'shadow_cache\.refreshes$')
+mshr_off=$(shadow_stat shadowhit_noserve 'dcache\.demandMshrMisses::total$')
+mshr=${mshr:-0}; mshr_off=${mshr_off:-0}
+
+printf "  serves=%s safe=%s unsafe=%s refresh=%s/%s mshr=%s/%s\n" \
+       "$hits" "$safe" "$unsafe" "$refresh" "$refresh_off" "$mshr" "$mshr_off"
+
+if [ "$hits" -ge 3 ]; then
+    printf "  shadow_hit     PASS   (%s served)\n" "$hits"
+else
+    printf "  shadow_hit     FAIL   (expected >=3 serves, got %s)\n" "$hits"
+    fail=$((fail+1))
+fi
+if [ "$unsafe" -eq 0 ]; then
+    printf "  safe-only      PASS   (no older/other-thread serves)\n"
+else
+    printf "  safe-only      FAIL   (%s unsafe serves)\n" "$unsafe"
+    fail=$((fail+1))
+fi
+if [ "$mshr_off" -gt "$mshr" ]; then
+    printf "  hit_no_mshr    PASS   (serve avoids %s MSHR misses)\n" \
+           "$((mshr_off - mshr))"
+else
+    printf "  hit_no_mshr    FAIL   (mshr on=%s off=%s)\n" "$mshr" "$mshr_off"
+    fail=$((fail+1))
+fi
+if [ "$refresh_off" -gt "$refresh" ]; then
+    printf "  refresh_drop   PASS   (refresh on=%s off=%s)\n" \
+           "$refresh" "$refresh_off"
+else
+    printf "  refresh_drop   FAIL   (refresh on=%s off=%s)\n" \
+           "$refresh" "$refresh_off"
+    fail=$((fail+1))
+fi
 
 echo
 echo "== pass=$pass fail=$fail =="

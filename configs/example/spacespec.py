@@ -60,6 +60,11 @@ Environment
 -----------
 SPACESPEC_ENTRIES   shadow entries (default 64, SafeSpec Fig. 3)
 SPACESPEC_LVP       0 disables the Load Value Predictor (default 1)
+SPACESPEC_SERVE     0 disables the Layer 3 shadow-hit serve (default 1)
+
+Secure memory is not supported: the shadow key has no secure bit, so a
+secure speculative fill is a fatal configuration error rather than a
+silently unprotected line.
 """
 
 import os
