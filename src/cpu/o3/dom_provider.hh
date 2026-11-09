@@ -158,6 +158,42 @@ class DomValueProvider
         entry->mask |= mask;
     }
 
+    /**
+     * Forget the committed value of [paddr, paddr+size).  Used when a
+     * committed store cannot supply exact bytes (masked/atomic/store-
+     * conditional writes).
+     */
+    void
+    invalidate(Addr paddr, unsigned size)
+    {
+        if (size == 0 || size > sizeof(uint64_t)) {
+            return;
+        }
+
+        const unsigned offset = paddr & 7;
+        if (offset + size > sizeof(uint64_t)) {
+            return;
+        }
+
+        const uint64_t mask = byteMask(offset, size);
+        const uint64_t word = paddr >> 3;
+        const std::size_t set = word % sets;
+
+        for (unsigned way = 0; way < Ways; way++) {
+            Entry &entry = table[set * Ways + way];
+            if (!entry.valid || entry.tag != word) {
+                continue;
+            }
+
+            entry.value &= ~mask;
+            entry.mask &= ~mask;
+            if (entry.mask == 0) {
+                entry.valid = false;
+            }
+            return;
+        }
+    }
+
     std::size_t
     entryCount() const
     {

@@ -1277,6 +1277,12 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
         cpu->domResolve(head_inst->seqNum, tid);
     }
 
+    // Populate/update the committed-value provider only after the value is
+    // architecturally committed.
+    if (cpu->domProviderEnabled()) {
+        cpu->domProviderCommit(head_inst);
+    }
+
     // Finally clear the head ROB entry.
     rob->retireHead(tid);
 

@@ -1690,6 +1690,19 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
         ++stats.domShadowedLoads;
         const RequestPtr &dom_req = request->mainReq();
         if (!cpu->domCacheHit(dom_req->getPaddr(), dom_req->isSecure())) {
+            // The exact committed-value provider is queried before the
+            // shadowed miss is dropped.  A hit supplies the bytes with a
+            // fixed latency and skips the memory access entirely.
+            if (cpu->domProviderEnabled() &&
+                cpu->domProviderLookup(dom_req, load_inst->memData)) {
+                PacketPtr data_pkt = new Packet(dom_req, MemCmd::ReadReq);
+                data_pkt->dataStatic(load_inst->memData);
+                WritebackEvent *wb = new WritebackEvent(load_inst, data_pkt,
+                                                        this);
+                cpu->schedule(wb, curTick() + cpu->domProviderLatency());
+                return NoFault;
+            }
+
             panic_if(load_inst->domCaster == 0,
                      "DoM: delaying load [sn:%llu] without a caster",
                      load_inst->seqNum);

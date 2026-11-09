@@ -46,6 +46,7 @@
 
 #include <iostream>
 #include <list>
+#include <memory>
 #include <queue>
 #include <set>
 #include <vector>
@@ -59,6 +60,7 @@
 #include "cpu/o3/commit.hh"
 #include "cpu/o3/decode.hh"
 #include "cpu/o3/dom.hh"
+#include "cpu/o3/dom_provider.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/fetch.hh"
 #include "cpu/o3/free_list.hh"
@@ -631,6 +633,18 @@ class CPU : public BaseCPU
     /** Discard shadow state younger than a squash point. */
     void domSquash(InstSeqNum seq, ThreadID tid);
 
+    /** Is the committed-value provider enabled? */
+    bool domProviderEnabled() const { return domProvActive; }
+
+    /** Fixed provider hit latency in cycles. */
+    unsigned domProviderLatency() const { return domProvLatency; }
+
+    /** Try to serve a shadowed L1 miss from committed state. */
+    bool domProviderLookup(const RequestPtr &req, uint8_t *dst);
+
+    /** Populate or update the provider from a committed access. */
+    void domProviderCommit(const DynInstPtr &inst);
+
   private:
     /** Resolve the L1 data cache through the bound data port, once. */
     BaseCache *domResolveCache();
@@ -639,6 +653,10 @@ class CPU : public BaseCPU
     bool domCacheResolved = false;
     BaseCache *domCache = nullptr;
     DomShadowBuffer domSb[MaxThreads];
+
+    bool domProvActive = false;
+    unsigned domProvLatency = 1;
+    std::unique_ptr<DomValueProvider> domProv;
 
   public:
     struct CPUStats : public statistics::Group

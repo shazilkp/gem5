@@ -56,6 +56,15 @@ main()
     uint8_t straddle[4] = {};
     assert(!provider.lookup(0x4007, 2, straddle));
 
+    // Invalidating committed bytes removes them from the known set.
+    provider.fill(0x5000, reinterpret_cast<const uint8_t *>(&word), 8);
+    provider.invalidate(0x5000, 2);
+    assert(!provider.lookup(0x5000, 8, reinterpret_cast<uint8_t *>(&out)));
+    uint32_t tail = 0;
+    assert(provider.lookup(0x5002, 4, reinterpret_cast<uint8_t *>(&tail)));
+    provider.invalidate(0x5002, 6);
+    assert(!provider.lookup(0x5002, 4, reinterpret_cast<uint8_t *>(&tail)));
+
     // Round-robin eviction remains functional.
     for (int i = 0; i < 1000; i++) {
         provider.fill(0x8000 + i * 8,

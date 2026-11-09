@@ -43,6 +43,7 @@
 
 #include "cpu/o3/cpu.hh"
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "base/logging.hh"
@@ -473,6 +474,28 @@ CPU::startup()
         }
     }
 
+    domProvActive = domActive && (std::getenv("GEM5_PROV") != nullptr);
+    if (domProvActive) {
+        std::size_t entries = 65536;
+        if (const char *env = std::getenv("GEM5_PROV_ENTRIES")) {
+            entries = std::strtoull(env, nullptr, 10);
+        }
+
+        const std::size_t ways = DomValueProvider::Ways;
+        entries = std::max<std::size_t>(ways, entries);
+        entries = (entries / ways) * ways;
+
+        domProv = std::make_unique<DomValueProvider>(entries);
+
+        if (const char *env = std::getenv("GEM5_PROV_LATENCY")) {
+            domProvLatency = std::strtoul(env, nullptr, 10);
+        }
+
+        inform("DoM provider: %zu entries (%zu sets x %zu ways), "
+               "fixed latency %u cycles", entries, domProv->setCount(),
+               ways, domProvLatency);
+    }
+
     bac.startupStage();
     fetch.startupStage();
     decode.startupStage();
@@ -581,6 +604,67 @@ CPU::domSquash(InstSeqNum seq, ThreadID tid)
     if (domCache != nullptr) {
         domCache->domSquash(seq);
     }
+}
+
+bool
+CPU::domProviderLookup(const RequestPtr &req, uint8_t *dst)
+{
+    if (!domProvActive || domProv == nullptr) {
+        return false;
+    }
+
+    // Uncacheable accesses must always reach the device.
+    if (req->isUncacheable()) {
+        ++cpuStats.domProvMisses;
+        return false;
+    }
+
+    if (domProv->lookup(req->getPaddr(), req->getSize(), dst)) {
+        ++cpuStats.domProvHits;
+        return true;
+    }
+
+    ++cpuStats.domProvMisses;
+    return false;
+}
+
+void
+CPU::domProviderCommit(const DynInstPtr &inst)
+{
+    if (!domProvActive || domProv == nullptr) {
+        return;
+    }
+    if (inst->getFault() != NoFault || !inst->effAddrValid()) {
+        return;
+    }
+
+    if (inst->isLoad()) {
+        if (inst->memData != nullptr) {
+            domProv->fill(inst->physEffAddr, inst->memData, inst->effSize);
+            ++cpuStats.domProvFills;
+        }
+        return;
+    }
+
+    if (!inst->isStore()) {
+        return;
+    }
+
+    // Atomics, store-conditionals, and masked stores cannot always supply
+    // exact bytes for the whole access; invalidate rather than risk a stale
+    // committed value.
+    const bool masked = inst->savedRequest != nullptr &&
+        inst->savedRequest->mainReq() != nullptr &&
+        inst->savedRequest->mainReq()->isMasked();
+
+    if (inst->isAtomic() || inst->isStoreConditional() || masked ||
+        inst->memData == nullptr) {
+        domProv->invalidate(inst->physEffAddr, inst->effSize);
+        return;
+    }
+
+    domProv->fill(inst->physEffAddr, inst->memData, inst->effSize);
+    ++cpuStats.domProvFills;
 }
 
 void

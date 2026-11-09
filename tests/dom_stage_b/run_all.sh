@@ -12,6 +12,7 @@ bash "$ROOT/tests/dom_stage_b/run_b0.sh" "$OUT"
 bash "$ROOT/tests/dom_stage_b/run_b2.sh" "$OUT"
 bash "$ROOT/tests/dom_stage_b/run_e.sh" "$OUT"
 bash "$ROOT/tests/dom_stage_b/run_correctness.sh" "$OUT"
+bash "$ROOT/tests/dom_stage_b/run_provider.sh" "$OUT"
 bash "$ROOT/tests/dom_stage_b/run_stress.sh" "$OUT"
 
 echo "all Stage B micro tests passed"

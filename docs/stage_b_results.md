@@ -48,6 +48,27 @@ Branch: `feat/dom`.  Last updated: 2026-11-09.
   unresolved caster, defeating the speculative-cache-state guarantee.
 - Stats: `domCastersC`, `domCastersE`, `domDelayedMisses`, `domReleased`.
 
+### B5: exact committed-value provider
+
+- `DomValueProvider` (`src/cpu/o3/dom_provider.hh`): 4-way set-associative
+  per-word table with byte granularity.  Each entry stores a tag, a 64-bit
+  value, and a byte mask of known committed bytes.  A lookup succeeds only
+  when every requested byte is known.
+- Queried in `LSQUnit::read` on a shadowed L1 miss, **after** the store
+  forwarding scan and **before** the DoM drop.  A hit fills `memData` and
+  schedules a fixed-latency writeback (`GEM5_PROV_LATENCY`, default 1 cycle),
+  skipping the memory access; a miss falls through to the normal drop/re-issue.
+- Populated only from committed accesses in `Commit::commitHead`:
+  loads fill the loaded bytes; unmasked stores update the written bytes;
+  masked, atomic, and store-conditional writes invalidate the affected bytes.
+  Uncacheable requests bypass the provider.
+- Enable with `GEM5_PROV`; size with `GEM5_PROV_ENTRIES` (default 65536;
+  4096 for the 64 KiB arm).  Stats: `domProvHits`, `domProvMisses`,
+  `domProvFills`.
+- Older in-flight stores forward first because the LSQ forwarding scan runs
+  before the provider lookup; a faulting/untranslated access never reaches
+  `read`.
+
 ## Tests
 
 Host-side unit tests (no gem5 build):
@@ -75,6 +96,8 @@ Gem5 tests (hard timeout per run; a hang is a failure):
 | `run_b2.sh` shadowed hit | deferred 1976, released 997; output equal |
 | `run_e.sh` TLB-thrash E-shadow | E-casters 13531, delayed 2503; output equal |
 | `run_correctness.sh` branchy/squash | outputs equal; 4597/4241 and 14814/14437 delayed/released |
+| `run_provider.sh` provider hit | x=42, y=42; prov hits 49, misses 15879; output equal |
+| `run_provider.sh` provider update | x=99, y=99; prov hits 49, misses 15976; output equal |
 | `run_stress.sh` load chain | output equal; IPC ratio 0.996; delayed 517; completes |
 | `run_stress.sh` hit loop | output equal; IPC ratio 0.999; no hit penalty |
 
@@ -102,7 +125,7 @@ all Stage B micro tests passed
 
 ## Not yet implemented
 
-- B5: committed-value provider integration (unit model and tests exist).
-- B6: equal-area larger-cache arm.
+- B6: equal-area larger-cache arm (runner supports `--l1d_size=128KiB/1MiB`;
+  SPEC runs pending).
 - B7: SPEC IPC arms and the provider-vs-cache comparison.
 - Prefetch side-effect deferral on shadowed hits (replacement only for now).
