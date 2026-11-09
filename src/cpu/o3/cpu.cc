@@ -500,7 +500,7 @@ CPU::startup()
 
     domProvActive = domActive && (std::getenv("GEM5_PROV") != nullptr);
     if (domProvActive) {
-        std::size_t entries = 65536;
+        std::size_t entries = 4096;
         if (const char *env = std::getenv("GEM5_PROV_ENTRIES")) {
             entries = std::strtoull(env, nullptr, 10);
         }

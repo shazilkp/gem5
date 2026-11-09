@@ -10,13 +10,17 @@ This is the implementation stage. Stage A only instrumented and profiled.
 | arm | cache | mitigation | area note |
 |---|---|---|---|
 | 1. baseline | L1 64 KiB, no L2 | none | reference |
-| 2. DoM | L1 64 KiB | head-delay DoM | the cost |
-| 3. DoM + provider | L1 64 KiB + value table | DoM + exact values | 4K entries ≈64 KiB; 65K ≈1 MiB |
-| 4. DoM + larger cache | L1 1 MiB **or** L2 1 MiB | DoM | same area as the 1 MiB provider |
-| 5. baseline + larger cache | L1 1 MiB / L2 1 MiB | none | cache null |
+| 2. DoM | L1 64 KiB | proper DoM | the cost |
+| 3. DoM + provider | L1 64 KiB + 4K-entry value table | DoM + exact values | ~64 KiB extra |
+| 4. DoM + larger L1 | L1 128 KiB | DoM | 64 KiB extra |
+| 5. DoM + L2 | L1 64 KiB + L2 64 KiB | DoM | 64 KiB extra |
+| 6. baseline + larger cache | L1 128 KiB or L2 64 KiB | none | cache null |
 
-The decisive comparison is 3 (1 MiB provider) vs 4 (1 MiB cache): same area,
-same DoM, different way to supply the value.
+The decisive comparison is 3 vs 4 and 3 vs 5: the same 64 KiB of extra
+area spent on the provider, on L1 capacity, or on L2 capacity.  The
+larger 65K-entry provider and 1 MiB L1 arms remain in the repository only
+as out-of-scope sensitivity points; a provider larger than the L1 is not
+a plausible design and must not be used as a research signal.
 
 ## DoM model (B1/B2/B3)
 
@@ -66,10 +70,11 @@ loads, invalidated by committed stores.
 
 ## Area accounting (B5)
 
-- 65K entries × ~16 B ≈ 1 MiB; 4K entries ≈ 64 KiB.
+- 4K entries × ~16 B ≈ 64 KiB.  This is the realistic provider size.
 - Compare at equal total on-chip area:
-  - 1 MiB provider + 64 KiB L1 vs 1 MiB L1 vs 1 MiB L2 + 64 KiB L1.
-- Also report the 64 KiB provider, where the area is small.
+  - 4K provider + 64 KiB L1 vs 128 KiB L1 vs 64 KiB L2 + 64 KiB L1.
+- The 65K-entry (~1 MiB) provider and 1 MiB L1 are out-of-scope sensitivity
+  points only; do not use them as a valid design signal.
 
 ## TDD layers
 
@@ -111,11 +116,17 @@ deepsjeng); then 200M for the interesting arms.
 
 Report:
 
-- IPC for arms 1–5 per workload;
+- IPC for the primary arms (baseline, DoM, 4K provider, equal-area L1,
+  equal-area L2, and their no-DoM baselines) per workload;
 - DoM cost = (1 − arm2/arm1);
 - provider recovery = (arm3 − arm2)/(arm1 − arm2);
-- provider vs larger cache at equal area = arm3 vs arm4;
+- provider vs equal-area L1 = arm3 vs arm4;
+- provider vs equal-area L2 = arm3 vs arm5;
 - area, lookup latency, invalidation cost, security caveats.
+
+The 65K provider and 1 MiB L1 arms are out-of-scope sensitivity points.
+They may be reported in an appendix only, never as a valid equal-area
+research signal.
 
 ## Validity
 
@@ -123,5 +134,6 @@ Report:
 - deterministic traces/runs.
 - the delayed set from Stage A predicts where the provider should help
   (omnetpp/xalancbmk positive; mcf/lbm negative).
-- the larger-cache arm is the null hypothesis; if arm3 ≈ arm4, the provider
-  is “just a cache” on this workload — that is a reportable result.
+- the equal-area L1 and L2 arms are the null hypothesis; if arm3 ≈ arm4 or
+  arm5, the provider is “just a cache” on this workload — that is a
+  reportable result.  The 65K/1 MiB rows are not part of this test.

@@ -8,13 +8,18 @@
 #   run_spec_arms.sh 505.mcf_r run_base_test_riscv.0000 \
 #       mcf_r_base.riscv "inp.in" 50000000 2
 #
-# Arms:
+# Primary arms (realistic equal-area study; provider is ~64 KiB):
 #   base           64 KiB L1, no mitigation
 #   dom            DoM, 64 KiB L1
 #   dom_prov4k     DoM + 4K-word provider (~64 KiB)
-#   dom_prov65k    DoM + 65K-word provider (~1 MiB)
-#   dom_l1_128k    DoM, 128 KiB L1 (equal area to the 4K provider)
-#   dom_l1_1m      DoM, 1 MiB L1 (equal area to the 65K provider)
+#   dom_l1_128k    DoM, 128 KiB L1 (64 + 64 KiB extra)
+#   base_l1_128k   128 KiB L1, no mitigation
+#   dom_l2_64k     DoM + 64 KiB L2 (64 KiB extra at the next level)
+#   base_l2_64k    64 KiB L2, no mitigation
+#
+# Out-of-scope sensitivity only (do not use as a research signal):
+#   dom_prov65k    DoM + 65K-word provider (~1 MiB; larger than the L1)
+#   dom_l1_1m      DoM, 1 MiB L1
 #   base_l1_1m     1 MiB L1, no mitigation
 set -euo pipefail
 
@@ -111,7 +116,18 @@ printf "bench\tarm\tipc\tinsts\tcycles\tdcacheMisses\tprovHits\tdomDelayed\tdomH
 run_arm base "" ""
 run_arm dom "GEM5_DOM=1" ""
 run_arm dom_prov4k "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=4096" ""
-run_arm dom_prov65k "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=65536" ""
+
+# Equal-area cache nulls for the 4K provider (the provider itself is ~64 KiB:
+# 4096 entries x ~16 B).  128 KiB L1 = 64 KiB baseline + 64 KiB extra;
+# 64 KiB L2 = 64 KiB extra at the next level.
 run_arm dom_l1_128k "GEM5_DOM=1" "--l1d_size=128KiB"
+run_arm base_l1_128k "" "--l1d_size=128KiB"
+run_arm dom_l2_64k "GEM5_DOM=1" "--l2cache --l2_size=64KiB"
+run_arm base_l2_64k "" "--l2cache --l2_size=64KiB"
+
+# Out-of-scope sensitivity only.  A 65K provider (~1 MiB) is larger than the
+# L1 and is not a valid design point; these rows must not be used as a
+# research signal or headline comparison.
+run_arm dom_prov65k "GEM5_DOM=1 GEM5_PROV=1 GEM5_PROV_ENTRIES=65536" ""
 run_arm dom_l1_1m "GEM5_DOM=1" "--l1d_size=1MiB"
 run_arm base_l1_1m "" "--l1d_size=1MiB"

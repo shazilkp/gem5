@@ -65,9 +65,10 @@ Branch: `feat/dom`.  Last updated: 2026-11-09.
   cache-maintenance, local, uncacheable, cross-word, and otherwise
   unrepresentable writes invalidate every affected word.  Prefetches do not
   fill, and non-cacheable/local/maintenance requests are never served.
-- Enable with `GEM5_PROV`; size with `GEM5_PROV_ENTRIES` (default 65536;
-  4096 for the 64 KiB arm).  Stats: `domProvHits`, `domProvMisses`,
-  `domProvFills`, `domProvFlushes`.
+- Enable with `GEM5_PROV`; size with `GEM5_PROV_ENTRIES` (default 4096,
+  ~64 KiB; the functional microbench overrides to 65536 to survive its
+  L1-eviction stream).  Stats: `domProvHits`, `domProvMisses`, `domProvFills`,
+  `domProvFlushes`.
 - Older in-flight stores forward first because the LSQ forwarding scan runs
   before the provider lookup; a faulting/untranslated access never reaches
   `read`.
@@ -157,9 +158,10 @@ all Stage B micro tests passed
 
 ## Not yet implemented
 
-- B6: equal-area larger-cache arm (runner supports `--l1d_size=128KiB/1MiB`;
-  SPEC runs pending).
-- B7: SPEC IPC arms and the provider-vs-cache comparison.
+- B6: equal-area cache arms (128 KiB L1 and 64 KiB L2; the 1 MiB L1 is
+  out-of-scope sensitivity).  The mcf 2M smoke is recorded; ref 200M SPEC
+  runs pending.
+- B7: SPEC IPC arms and the provider-vs-equal-area-cache comparison.
 - Prefetch side-effect deferral on shadowed hits (replacement only for now).
 
 ## SPEC smoke (mcf test, 2M-instruction window)
@@ -171,18 +173,21 @@ Preliminary, not the final ref 200M comparison.  All arms commit exactly
 |---|---|
 | base (64 KiB L1) | 1.323501 |
 | DoM | 1.296136 |
-| DoM + 4K provider | 1.310706 |
-| DoM + 65K provider | 1.311108 |
-| DoM, 128 KiB L1 | 1.291995 |
-| DoM, 1 MiB L1 | 1.384378 |
-| base, 1 MiB L1 | 1.407715 |
+| DoM + 4K provider (~64 KiB) | 1.310706 |
+| DoM, 128 KiB L1 (64 KiB extra) | 1.291995 |
+| base, 128 KiB L1 | 1.323710 |
+| DoM, 64 KiB L2 (64 KiB extra) | 1.330255 |
+| base, 64 KiB L2 | 1.384992 |
 
 - DoM cost: ~2.1%.
-- Provider recovery: ~53% (4K) and ~55% (65K) of the DoM cost.
-- Equal-area comparison on mcf: the 1 MiB L1 (1.3844) beats the 65K
-  provider (1.3111); the 4K provider (1.3107) beats the 128 KiB L1
-  (1.2920).  This is the mcf-negative result expected from Stage A: a
-  larger cache wins on this workload, while the provider still helps
-  relative to the DoM-only arm.
+- 4K-provider recovery: ~53% of the DoM cost.
+- Equal-area comparison on mcf (64 KiB extra area):
+  - 4K provider **beats** the 128 KiB L1 (1.3107 vs 1.2920, +1.45%).
+  - The 64 KiB L2 **beats** the 4K provider (1.3303 vs 1.3107, provider
+    −1.47%) and even the baseline.  On mcf, spending the extra area on a
+    small L2 is the strongest option; the provider is second.
+- The 65K provider (~1 MiB) and 1 MiB L1 arms are **out-of-scope
+  sensitivity points**.  They remain in the repository for completeness but
+  are not a valid design comparison and are not used in the conclusion.
 - These are test-input, short-window numbers; the ref 200M runs on the
   server are the decisive measurement.

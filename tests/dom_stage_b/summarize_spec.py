@@ -5,14 +5,18 @@ Reads the per-benchmark ipc.tsv files written by run_spec_arms.sh and prints
 the decisive comparisons:
 
   DoM cost            = 1 - IPC(dom) / IPC(base)
-  provider recovery   = (IPC(prov) - IPC(dom)) / (IPC(base) - IPC(dom))
-  equal-area check    = IPC(prov65k) vs IPC(dom_l1_1m)
-                        IPC(prov4k)  vs IPC(dom_l1_128k)
+  provider recovery   = (IPC(prov4k) - IPC(dom)) / (IPC(base) - IPC(dom))
+  equal-area L1 check = IPC(prov4k) vs IPC(dom_l1_128k)
+  equal-area L2 check = IPC(prov4k) vs IPC(dom_l2_64k)
 
 A positive recovery means the provider bought back some of the DoM cost.  If
 the provider and the equal-area cache have essentially the same IPC, the
 provider is behaving like a cache on that workload, which is a reportable
 result.
+
+The primary comparison uses the 4K provider (~64 KiB) against the 128 KiB L1
+and 64 KiB L2.  The 65K provider and 1 MiB L1 arms are out-of-scope
+sensitivity points and are deliberately not printed.
 """
 
 import argparse
@@ -95,8 +99,8 @@ def main():
     benches = sorted({bench for bench, _ in rows})
 
     header = (
-        "| bench | base IPC | DoM IPC | DoM cost | prov4k | recovery | "
-        "prov65k | recovery | L1-128k | L1-1m | prov65k vs L1-1m |"
+        "| bench | base | DoM | DoM cost | prov4k | recovery | "
+        "L1 128k | L2 64k | prov vs L1 | prov vs L2 |"
     )
     print(header)
     print("|" + "---|" * 11)
@@ -106,22 +110,23 @@ def main():
         base = value(rows, bench, "base", "ipc")
         dom = value(rows, bench, "dom", "ipc")
         p4 = value(rows, bench, "dom_prov4k", "ipc")
-        p65 = value(rows, bench, "dom_prov65k", "ipc")
         l128 = value(rows, bench, "dom_l1_128k", "ipc")
-        l1m = value(rows, bench, "dom_l1_1m", "ipc")
+        l2 = value(rows, bench, "dom_l2_64k", "ipc")
+        b128 = value(rows, bench, "base_l1_128k", "ipc")
+        b2 = value(rows, bench, "base_l2_64k", "ipc")
 
         cost = (1.0 - dom / base) if base > 0 else 0.0
         r4 = recovery(p4, dom, base)
-        r65 = recovery(p65, dom, base)
-        vs_l1m = (p65 - l1m) / l1m if l1m > 0 else 0.0
+        vs_l1 = (p4 - l128) / l128 if l128 > 0 else 0.0
+        vs_l2 = (p4 - l2) / l2 if l2 > 0 else 0.0
 
         def fmt_recovery(r):
             return "n/a" if r is None else pct(r)
 
         print(
             f"| {bench} | {base:.4f} | {dom:.4f} | {pct(cost)} | "
-            f"{p4:.4f} | {fmt_recovery(r4)} | {p65:.4f} | "
-            f"{fmt_recovery(r65)} | {l128:.4f} | {l1m:.4f} | {pct(vs_l1m)} |"
+            f"{p4:.4f} | {fmt_recovery(r4)} | {l128:.4f} | {l2:.4f} | "
+            f"{pct(vs_l1)} | {pct(vs_l2)} |"
         )
 
         out_rows.append({
@@ -131,14 +136,19 @@ def main():
             "dom_cost": cost,
             "prov4k_ipc": p4,
             "prov4k_recovery": r4 if r4 is not None else "",
-            "prov65k_ipc": p65,
-            "prov65k_recovery": r65 if r65 is not None else "",
             "l1_128k_ipc": l128,
-            "l1_1m_ipc": l1m,
-            "prov65k_vs_l1_1m": vs_l1m,
-            "provHits": value(rows, bench, "dom_prov65k", "provHits"),
+            "l2_64k_ipc": l2,
+            "base_l1_128k_ipc": b128,
+            "base_l2_64k_ipc": b2,
+            "prov4k_vs_l1_128k": vs_l1,
+            "prov4k_vs_l2_64k": vs_l2,
+            "provHits": value(rows, bench, "dom_prov4k", "provHits"),
             "domDelayed": value(rows, bench, "dom", "domDelayed"),
         })
+
+    print("\nPrimary comparison: 4K provider (~64 KiB) vs 128 KiB L1 and "
+          "64 KiB L2.\nThe 65K provider and 1 MiB L1 arms are out-of-scope "
+          "sensitivity points and are deliberately not used here.")
 
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as f:
