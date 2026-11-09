@@ -2,10 +2,10 @@
 # Stage B SPEC arm runner.
 #
 # usage:
-#   run_spec_arms.sh <bench> <run> <binary> <options> [maxinsts] [core]
+#   bash run_spec_arms.sh <bench> <run> <binary> <options> [maxinsts] [core]
 #
 # example:
-#   run_spec_arms.sh 505.mcf_r run_base_test_riscv.0000 \
+#   bash run_spec_arms.sh 505.mcf_r run_base_test_riscv.0000 \
 #       mcf_r_base.riscv "inp.in" 50000000 2
 #
 # Primary arms (realistic equal-area study; provider is ~64 KiB):

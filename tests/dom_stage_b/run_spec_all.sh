@@ -27,7 +27,7 @@ run_one() {
         return
     fi
     echo "=== $bench ($MAX insts) ==="
-    "$ROOT/tests/dom_stage_b/run_spec_arms.sh" \
+    bash "$ROOT/tests/dom_stage_b/run_spec_arms.sh" \
         "$bench" "$RUN" "$bin" "$opts" "$MAX"
 }
 

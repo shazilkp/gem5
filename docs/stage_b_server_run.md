@@ -26,7 +26,7 @@ cd /home/spectre/gem5
 SPEC=/home/spectre/spec/benchspec/CPU \
 DOM_OUT=/home/spectre/results_dom_stage_b \
 PRIMARY_ONLY=1 GEM5_TIMEOUT=7200 \
-tests/dom_stage_b/run_spec_arms.sh \
+bash tests/dom_stage_b/run_spec_arms.sh \
   505.mcf_r run_base_refrate_riscv.0000 \
   mcf_r_base.riscv "inp.in" 50000000 2
 ```
@@ -44,7 +44,7 @@ SPEC=/home/spectre/spec/benchspec/CPU \
 RUN=run_base_refrate_riscv.0000 \
 DOM_OUT=/home/spectre/results_dom_stage_b \
 PRIMARY_ONLY=1 GEM5_TIMEOUT=7200 \
-tests/dom_stage_b/run_spec_all.sh 50000000
+bash tests/dom_stage_b/run_spec_all.sh 50000000
 ```
 
 The per-benchmark options in `run_spec_all.sh` are the test-input names.
