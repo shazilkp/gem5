@@ -161,3 +161,28 @@ all Stage B micro tests passed
   SPEC runs pending).
 - B7: SPEC IPC arms and the provider-vs-cache comparison.
 - Prefetch side-effect deferral on shadowed hits (replacement only for now).
+
+## SPEC smoke (mcf test, 2M-instruction window)
+
+Preliminary, not the final ref 200M comparison.  All arms commit exactly
+2,000,006 instructions and produce the same architectural path.
+
+| arm | IPC |
+|---|---|
+| base (64 KiB L1) | 1.323501 |
+| DoM | 1.296136 |
+| DoM + 4K provider | 1.310706 |
+| DoM + 65K provider | 1.311108 |
+| DoM, 128 KiB L1 | 1.291995 |
+| DoM, 1 MiB L1 | 1.384378 |
+| base, 1 MiB L1 | 1.407715 |
+
+- DoM cost: ~2.1%.
+- Provider recovery: ~53% (4K) and ~55% (65K) of the DoM cost.
+- Equal-area comparison on mcf: the 1 MiB L1 (1.3844) beats the 65K
+  provider (1.3111); the 4K provider (1.3107) beats the 128 KiB L1
+  (1.2920).  This is the mcf-negative result expected from Stage A: a
+  larger cache wins on this workload, while the provider still helps
+  relative to the DoM-only arm.
+- These are test-input, short-window numbers; the ref 200M runs on the
+  server are the decisive measurement.
