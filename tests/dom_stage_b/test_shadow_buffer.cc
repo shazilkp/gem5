@@ -55,6 +55,43 @@ main()
     sq.retire(40);
     assert(sq.empty());
 
+    // A load must record the youngest caster *before* its own E entry is
+    // added.  If it is added first, youngestCaster() returns the load itself
+    // and it deadlocks waiting for its own retirement.
+    DomShadowBuffer self;
+    self.add(100);
+    const InstSeqNum loadSeq = 101;
+    const InstSeqNum caster = self.youngestCaster();
+    assert(caster == 100);
+    assert(caster < loadSeq);
+    self.add(loadSeq);
+    assert(self.contains(loadSeq));
+    assert(self.youngestCaster() == loadSeq);   // the trap the CPU must avoid
+    auto popped = self.retire(loadSeq);
+    assert(popped.size() == 2);
+    assert(popped[0] == 100 && popped[1] == loadSeq);
+    assert(self.empty());
+
+    // resolve() stops new shadows, but a load that already recorded the
+    // caster stays shadowed until the entry leaves the SB.
+    DomShadowBuffer sc;
+    sc.add(200);
+    assert(sc.isCasting(200));
+    assert(sc.contains(200));
+    assert(sc.resolve(200));
+    assert(!sc.isCasting(200));
+    assert(sc.contains(200));
+    auto retired = sc.retire(200);
+    assert(retired.size() == 1 && retired[0] == 200);
+    assert(!sc.contains(200));
+
+    // Squash removes the entry from the buffer entirely.
+    DomShadowBuffer ss;
+    ss.add(300);
+    ss.squash(299);
+    assert(!ss.contains(300));
+    assert(!ss.isCasting(300));
+
     std::printf("shadow buffer: all checks passed\n");
     return 0;
 }

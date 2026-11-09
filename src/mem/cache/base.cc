@@ -45,6 +45,8 @@
 
 #include "mem/cache/base.hh"
 
+#include <algorithm>
+
 #include "base/compiler.hh"
 #include "base/logging.hh"
 #include "debug/Cache.hh"
@@ -1306,9 +1308,22 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
                 "Should never see a write in a read-only cache %s\n",
                 name());
 
-    // Access block in the tags
+    // Access block in the tags.  A shadowed demand load must not disturb the
+    // replacement policy on a hit; the update is applied at release.
     Cycles tag_latency(0);
-    blk = tags->accessBlock(pkt, tag_latency);
+    const bool dom_deferred_probe =
+        pkt->isRead() && pkt->req->domCaster() != 0;
+    if (dom_deferred_probe) {
+        blk = tags->probeBlock(pkt, tag_latency);
+        if (blk != nullptr && blk->isValid()) {
+            domDeferredHits[pkt->req->domCaster()].push_back(
+                {pkt->getBlockAddr(blkSize), pkt->isSecure(),
+                 pkt->req->domSeq()});
+            stats.domHitsDeferred++;
+        }
+    } else {
+        blk = tags->accessBlock(pkt, tag_latency);
+    }
 
     DPRINTF(Cache, "%s for %s %s\n", __func__, pkt->print(),
             blk ? "hit " + blk->print() : "miss");
@@ -2341,6 +2356,10 @@ BaseCache::CacheStats::CacheStats(BaseCache &c)
              "average overall mshr uncacheable latency"),
     ADD_STAT(replacements, statistics::units::Count::get(),
              "number of replacements"),
+    ADD_STAT(domHitsDeferred, statistics::units::Count::get(),
+             "number of shadowed hits whose replacement update was deferred"),
+    ADD_STAT(domHitsReleased, statistics::units::Count::get(),
+             "number of deferred replacement updates applied at release"),
     ADD_STAT(dataExpansions, statistics::units::Count::get(),
              "number of data expansions"),
     ADD_STAT(dataContractions, statistics::units::Count::get(),
@@ -2805,6 +2824,42 @@ WriteAllocator::updateMode(Addr write_addr, unsigned write_size,
         resetDelay(blk_addr);
     }
     nextAddr = write_addr + write_size;
+}
+
+void
+BaseCache::domRelease(uint64_t caster)
+{
+    auto it = domDeferredHits.find(caster);
+    if (it == domDeferredHits.end()) {
+        return;
+    }
+
+    for (const auto &hit : it->second) {
+        CacheBlk *blk = tags->findBlock({hit.addr, hit.secure});
+        if (blk != nullptr && blk->isValid()) {
+            tags->touchBlock(blk);
+            stats.domHitsReleased++;
+        }
+    }
+    domDeferredHits.erase(it);
+}
+
+void
+BaseCache::domSquash(uint64_t seq)
+{
+    for (auto it = domDeferredHits.begin(); it != domDeferredHits.end();) {
+        auto &hits = it->second;
+        hits.erase(std::remove_if(hits.begin(), hits.end(),
+            [seq](const DomDeferredHit &hit) {
+                return hit.loadSeq > seq;
+            }), hits.end());
+
+        if (hits.empty() || it->first > seq) {
+            it = domDeferredHits.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 } // namespace gem5

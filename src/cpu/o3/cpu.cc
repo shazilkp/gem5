@@ -45,6 +45,7 @@
 
 #include <cstdlib>
 
+#include "base/logging.hh"
 #include "cpu/activity.hh"
 #include "cpu/checker/cpu.hh"
 #include "cpu/checker/thread_context.hh"
@@ -354,7 +355,17 @@ CPU::CPUStats::CPUStats(CPU *cpu)
                "to idling"),
       ADD_STAT(quiesceCycles, statistics::units::Cycle::get(),
                "Total number of cycles that CPU has spent quiesced or waiting "
-               "for an interrupt")
+               "for an interrupt"),
+      ADD_STAT(domCastersC, statistics::units::Count::get(),
+               "DoM control-flow (C) casters inserted"),
+      ADD_STAT(domCastersE, statistics::units::Count::get(),
+               "DoM memory/exception (E) casters inserted"),
+      ADD_STAT(domProvHits, statistics::units::Count::get(),
+               "DoM provider lookups that supplied a committed value"),
+      ADD_STAT(domProvMisses, statistics::units::Count::get(),
+               "DoM provider lookups that could not supply the value"),
+      ADD_STAT(domProvFills, statistics::units::Count::get(),
+               "DoM provider committed fills/updates")
 {
     // Register any of the O3CPU's stats here.
     timesIdled
@@ -492,23 +503,45 @@ CPU::domInsert(const DynInstPtr &inst)
 {
     DomShadowBuffer &sb = domSb[inst->threadNumber];
 
-    // C-shadow: control flow whose direction or target is not known at
-    // decode.  Direct unconditional jumps are already resolved.
-    if (inst->isControl() &&
-        !(inst->isDirectCtrl() && inst->isUncondCtrl())) {
-        sb.add(inst->seqNum);
-    }
+    // E-shadow: a memory access whose translation/fault status is not yet
+    // final.  The cast is cleared when the access finishes translation, and
+    // the entry leaves the SB at retirement.
+    const bool mem_caster = inst->isMemRef() &&
+        !(inst->isInstPrefetch() || inst->isDataPrefetch());
 
+    // A load's shadow is the youngest caster that existed before it was
+    // dispatched.  Compute it before adding the load's own E entry, otherwise
+    // the load would shadow itself and never be released.
     if (inst->isLoad()) {
         inst->domCaster = sb.youngestCaster();
+        panic_if(inst->domCaster >= inst->seqNum,
+                 "DoM: load [sn:%llu] recorded a self/younger caster "
+                 "[sn:%llu]", inst->seqNum, inst->domCaster);
+    }
+
+    if (mem_caster) {
+        sb.add(inst->seqNum);
+        ++cpuStats.domCastersE;
+    } else if (inst->isControl() &&
+               !(inst->isDirectCtrl() && inst->isUncondCtrl())) {
+        // C-shadow: control flow whose direction or target is not known at
+        // decode.  Direct unconditional jumps are already resolved.
+        sb.add(inst->seqNum);
+        ++cpuStats.domCastersC;
     }
 }
 
 bool
 CPU::domShadowed(const DynInstPtr &inst) const
 {
+    panic_if(inst->domCaster >= inst->seqNum,
+             "DoM: load [sn:%llu] is shadowed by self/younger [sn:%llu]",
+             inst->seqNum, inst->domCaster);
+
+    // A load stays shadowed until its caster retires and leaves the SB, not
+    // merely until the caster's casts bit is cleared at verification.
     return inst->domCaster != 0 &&
-           domSb[inst->threadNumber].isCasting(inst->domCaster);
+           domSb[inst->threadNumber].contains(inst->domCaster);
 }
 
 bool
@@ -522,21 +555,32 @@ CPU::domCacheHit(Addr paddr, bool is_secure)
 void
 CPU::domResolve(InstSeqNum seq, ThreadID tid)
 {
-    if (domSb[tid].resolve(seq)) {
-        iew.ldstQueue.releaseShadowed(seq);
-    }
+    // Verification stops the instruction from casting a shadow on newly
+    // dispatched loads.  Loads that already recorded it wait for retirement:
+    // only then is it certain that every older caster has also retired.
+    domSb[tid].resolve(seq);
 }
 
 void
 CPU::domRetire(InstSeqNum seq, ThreadID tid)
 {
-    domSb[tid].retire(seq);
+    const auto retired = domSb[tid].retire(seq);
+    for (InstSeqNum caster : retired) {
+        iew.ldstQueue.releaseShadowed(caster);
+        if (domCache != nullptr) {
+            domCache->domRelease(caster);
+        }
+    }
 }
 
 void
 CPU::domSquash(InstSeqNum seq, ThreadID tid)
 {
     domSb[tid].squash(seq);
+
+    if (domCache != nullptr) {
+        domCache->domSquash(seq);
+    }
 }
 
 void

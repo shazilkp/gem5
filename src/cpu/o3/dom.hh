@@ -30,6 +30,7 @@
 #define __CPU_O3_DOM_HH__
 
 #include <deque>
+#include <vector>
 
 #include "cpu/inst_seq.hh"
 
@@ -99,6 +100,22 @@ class DomShadowBuffer
     }
 
     /**
+     * Is the caster still in the buffer?  A load that recorded this caster
+     * stays shadowed until the caster retires and leaves the SB, even after
+     * its casts bit has been cleared at verification.
+     */
+    bool
+    contains(InstSeqNum seq) const
+    {
+        for (const auto &entry : entries) {
+            if (entry.seq == seq) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Verify a caster.  Returns true if it was still casting, i.e. if the
      * loads that recorded it as their caster can be released.
      */
@@ -117,13 +134,21 @@ class DomShadowBuffer
         return false;
     }
 
-    /** Drop all casters at or below the retired instruction. */
-    void
+    /**
+     * Drop all casters at or below the retired instruction and return their
+     * sequence numbers.  A caster leaving the SB is what releases the loads
+     * that recorded it: in-order retirement guarantees that every older
+     * caster has already left as well.
+     */
+    std::vector<InstSeqNum>
     retire(InstSeqNum seq)
     {
+        std::vector<InstSeqNum> retired;
         while (!entries.empty() && entries.front().seq <= seq) {
+            retired.push_back(entries.front().seq);
             entries.pop_front();
         }
+        return retired;
     }
 
     /** Drop every caster younger than the squash point. */

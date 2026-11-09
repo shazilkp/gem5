@@ -869,6 +869,12 @@ LSQ::SingleDataRequest::finish(const Fault &fault, const RequestPtr &request,
 
         LSQRequest::_inst->fault = fault;
         LSQRequest::_inst->translationCompleted(true);
+
+        // E-shadow: the access is now known to fault or not; it stops
+        // casting.  Loads that already recorded it wait for retirement.
+        if (_inst->cpu->domEnabled()) {
+            _inst->cpu->domResolve(_inst->seqNum, _inst->threadNumber);
+        }
     }
 }
 
@@ -914,6 +920,10 @@ LSQ::SplitDataRequest::finish(const Fault &fault, const RequestPtr &req,
             } else {
                 _inst->fault = _fault[0];
                 setState(State::Fault);
+            }
+
+            if (_inst->cpu->domEnabled()) {
+                _inst->cpu->domResolve(_inst->seqNum, _inst->threadNumber);
             }
         }
 
@@ -1305,6 +1315,7 @@ LSQ::SingleDataRequest::sendPacketToCache()
     PacketPtr pkt = _packets.at(0);
     pkt->req->setDomSeq(instruction()->seqNum);
     pkt->req->setDomCommitSeq(lsqUnit()->committedSeq());
+    pkt->req->setDomCaster(instruction()->domCaster);
     if (lsqUnit()->trySendPacket(isLoad(), pkt))
         _numOutstandingPackets = 1;
 }
@@ -1318,6 +1329,7 @@ LSQ::SplitDataRequest::sendPacketToCache()
             _packets.at(numReceivedPackets + _numOutstandingPackets);
         pkt->req->setDomSeq(instruction()->seqNum);
         pkt->req->setDomCommitSeq(lsqUnit()->committedSeq());
+        pkt->req->setDomCaster(instruction()->domCaster);
         if (!lsqUnit()->trySendPacket(isLoad(), pkt)) {
             break;
         }

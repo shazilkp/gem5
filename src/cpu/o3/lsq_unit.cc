@@ -42,6 +42,7 @@
 #include "cpu/o3/lsq_unit.hh"
 
 #include "arch/generic/debugfaults.hh"
+#include "base/logging.hh"
 #include "base/str.hh"
 #include "cpu/checker/cpu.hh"
 #include "cpu/o3/dyn_inst.hh"
@@ -270,13 +271,6 @@ LSQUnit::LSQUnitStats::LSQUnitStats(statistics::Group *parent)
       ADD_STAT(blockedByCache, statistics::units::Count::get(),
                "Number of times an access to memory failed due to the cache "
                "being blocked"),
-      ADD_STAT(domShadowedLoads, statistics::units::Count::get(),
-               "Number of loads executed under an unresolved DoM shadow"),
-      ADD_STAT(domDelayedMisses, statistics::units::Count::get(),
-               "Number of shadowed loads whose L1 probe missed and were "
-               "dropped"),
-      ADD_STAT(domReleased, statistics::units::Count::get(),
-               "Number of delayed loads re-issued after caster verification"),
       ADD_STAT(loadToUse, statistics::units::Cycle::get(),
                "Distribution of cycle latency between the "
                "first time a load is issued and its completion"),
@@ -285,7 +279,14 @@ LSQUnit::LSQUnitStats::LSQUnitStats(statistics::Group *parent)
       ADD_STAT(lqAvgOccupancy, statistics::units::Ratio::get(),
                "Average LQ Occupancy (UsedSlots/TotalSlots)"),
       ADD_STAT(sqAvgOccupancy, statistics::units::Ratio::get(),
-               "Average SQ Occupancy (UsedSlots/TotalSlots)")
+               "Average SQ Occupancy (UsedSlots/TotalSlots)"),
+      ADD_STAT(domShadowedLoads, statistics::units::Count::get(),
+               "Number of loads executed under an unresolved DoM shadow"),
+      ADD_STAT(domDelayedMisses, statistics::units::Count::get(),
+               "Number of shadowed loads whose L1 probe missed and were "
+               "dropped"),
+      ADD_STAT(domReleased, statistics::units::Count::get(),
+               "Number of delayed loads re-issued after caster verification")
 {
     loadToUse
         .init(0, 299, 10)
@@ -626,6 +627,9 @@ LSQUnit::releaseShadowed(InstSeqNum caster)
         }
 
         const DynInstPtr &inst = entry.instruction();
+        panic_if(inst->domCaster >= inst->seqNum,
+                 "DoM: delayed/released load [sn:%llu] has caster [sn:%llu]",
+                 inst->seqNum, inst->domCaster);
         if (!inst->domDelayed || inst->domCaster != caster) {
             continue;
         }
@@ -1676,10 +1680,19 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
         return NoFault;
     }
     if (cpu->domEnabled() && load_inst->domCaster != 0 &&
+        !cpu->domShadowed(load_inst)) {
+        // The caster was verified while this load was in flight; subsequent
+        // sends must not be treated as shadowed.
+        load_inst->domCaster = 0;
+    }
+    if (cpu->domEnabled() && load_inst->domCaster != 0 &&
         cpu->domShadowed(load_inst)) {
         ++stats.domShadowedLoads;
         const RequestPtr &dom_req = request->mainReq();
         if (!cpu->domCacheHit(dom_req->getPaddr(), dom_req->isSecure())) {
+            panic_if(load_inst->domCaster == 0,
+                     "DoM: delaying load [sn:%llu] without a caster",
+                     load_inst->seqNum);
             load_inst->domDelayed = true;
             ++stats.domDelayedMisses;
             return NoFault;

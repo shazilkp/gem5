@@ -1,3 +1,7 @@
 array_branch
 branch_shadow
+hit_loop
+load_chain
+shadow_hit
 squash_shadow
+tlb_shadow

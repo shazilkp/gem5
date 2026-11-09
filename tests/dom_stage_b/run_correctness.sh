@@ -16,7 +16,7 @@ run_one() {
     mkdir -p "$dir"
     (
         cd "$dir"
-        env $envspec taskset -c 2 "$GEM5" -d "$dir/gem5" "$SE" \
+        env $envspec timeout "${GEM5_TIMEOUT:-180}" taskset -c 2 "$GEM5" -d "$dir/gem5" "$SE" \
             --cpu-type=O3CPU --caches \
             --cmd="$PROGS/$prog" \
             --output="$dir/out.txt" \

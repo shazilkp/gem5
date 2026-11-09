@@ -652,6 +652,17 @@ class CPU : public BaseCPU
         /** Stat for total number of cycles the CPU spends descheduled due to a
          * quiesce operation or waiting for an interrupt. */
         statistics::Scalar quiesceCycles;
+
+        /** DoM: control-flow (C) casters inserted. */
+        statistics::Scalar domCastersC;
+        /** DoM: memory/exception (E) casters inserted. */
+        statistics::Scalar domCastersE;
+        /** Delay-on-Miss provider: lookups served. */
+        statistics::Scalar domProvHits;
+        /** Delay-on-Miss provider: lookups not served. */
+        statistics::Scalar domProvMisses;
+        /** Delay-on-Miss provider: committed fills/updates. */
+        statistics::Scalar domProvFills;
     } cpuStats;
 
   public:

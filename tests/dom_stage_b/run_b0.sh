@@ -17,7 +17,7 @@ run_one() {
     mkdir -p "$OUT/$name"
     (
         cd "$OUT/$name"
-        "$@" taskset -c 2 "$GEM5" -d "$OUT/$name/gem5" "$SE" \
+        "$@" timeout "${GEM5_TIMEOUT:-180}" taskset -c 2 "$GEM5" -d "$OUT/$name/gem5" "$SE" \
             --cpu-type=O3CPU --caches \
             --cmd="$BIN" \
             --output="$OUT/$name/out.txt" \

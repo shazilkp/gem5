@@ -49,6 +49,8 @@
 #include <cassert>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "base/addr_range.hh"
 #include "base/compiler.hh"
@@ -1143,6 +1145,11 @@ class BaseCache : public ClockedObject
         /** Number of replacements of valid blocks. */
         statistics::Scalar replacements;
 
+        /** DoM: shadowed hits whose replacement update was deferred. */
+        statistics::Scalar domHitsDeferred;
+        /** DoM: deferred replacement updates applied at release. */
+        statistics::Scalar domHitsReleased;
+
         /** Number of data expansions. */
         statistics::Scalar dataExpansions;
 
@@ -1259,6 +1266,28 @@ class BaseCache : public ClockedObject
     bool inCache(Addr addr, bool is_secure) const {
         return tags->findBlock({addr, is_secure});
     }
+
+    /**
+     * Delay-on-Miss: apply the replacement updates deferred by shadowed hits
+     * that were waiting on this caster, then forget them.
+     */
+    void domRelease(uint64_t caster);
+
+    /** Delay-on-Miss: drop deferred updates in a squashed path. */
+    void domSquash(uint64_t seq);
+
+  private:
+    struct DomDeferredHit
+    {
+        Addr addr;
+        bool secure;
+        uint64_t loadSeq;
+    };
+
+    /** Deferred replacement updates, keyed by caster sequence number. */
+    std::unordered_map<uint64_t, std::vector<DomDeferredHit>> domDeferredHits;
+
+  public:
 
     bool hasBeenPrefetched(Addr addr, bool is_secure) const {
         CacheBlk *block = tags->findBlock({addr, is_secure});

@@ -469,6 +469,12 @@ class Request : public Extensible<Request>
     /** Stage A: committed sequence number at the point of issue. */
     uint64_t _domCommitSeq = 0;
 
+    /**
+     * Delay-on-Miss: sequence number of the shadow-casting instruction this
+     * load is waiting on.  Zero for non-shadowed requests.
+     */
+    uint64_t _domCaster = 0;
+
     /** Sequence number of the instruction that creates the request */
     InstSeqNum _reqInstSeqNum = 0;
 
@@ -531,6 +537,7 @@ class Request : public Extensible<Request>
           _extraData(other._extraData), _contextId(other._contextId),
           _pc(other._pc),
           _domSeq(other._domSeq), _domCommitSeq(other._domCommitSeq),
+          _domCaster(other._domCaster),
           _reqInstSeqNum(other._reqInstSeqNum),
           _localAccessor(other._localAccessor),
           translateDelta(other.translateDelta),
@@ -990,6 +997,10 @@ class Request : public Extensible<Request>
     /** Stage A provenance: committed sequence number at issue. */
     void setDomCommitSeq(uint64_t seq) { _domCommitSeq = seq; }
     uint64_t domCommitSeq() const { return _domCommitSeq; }
+
+    /** Delay-on-Miss: caster sequence number (0 if not shadowed). */
+    void setDomCaster(uint64_t seq) { _domCaster = seq; }
+    uint64_t domCaster() const { return _domCaster; }
 
     /**
      * Increment/Get the depth at which this request is responded to.

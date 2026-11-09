@@ -300,6 +300,26 @@ class BaseTags : public ClockedObject
     virtual CacheBlk* accessBlock(const PacketPtr pkt, Cycles &lat) = 0;
 
     /**
+     * Delay-on-Miss: locate a block without updating replacement state.
+     * The default falls back to a normal access for tags that do not
+     * implement deferred hits.
+     */
+    virtual CacheBlk*
+    probeBlock(const PacketPtr pkt, Cycles &lat)
+    {
+        return accessBlock(pkt, lat);
+    }
+
+    /**
+     * Delay-on-Miss: apply the replacement update that a shadowed hit
+     * deferred.  Tags without deferred-hit support may ignore this.
+     */
+    virtual void
+    touchBlock(CacheBlk *blk)
+    {
+    }
+
+    /**
      * Generate the tag from the given address.
      *
      * @param addr The address to get the tag from.

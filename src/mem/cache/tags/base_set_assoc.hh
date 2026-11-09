@@ -155,6 +155,32 @@ class BaseSetAssoc : public BaseTags
         return blk;
     }
 
+    CacheBlk* probeBlock(const PacketPtr pkt, Cycles &lat) override
+    {
+        CacheBlk *blk = findBlock({pkt->getAddr(), pkt->isSecure()});
+
+        stats.tagAccesses += allocAssoc;
+        if (sequentialAccess) {
+            if (blk != nullptr) {
+                stats.dataAccesses += 1;
+            }
+        } else {
+            stats.dataAccesses += allocAssoc;
+        }
+
+        // Deliberately do not update the reference count or the replacement
+        // policy.  Both are applied by touchBlock() when the shadow is
+        // released.
+        lat = lookupLatency;
+        return blk;
+    }
+
+    void touchBlock(CacheBlk *blk) override
+    {
+        blk->increaseRefCount();
+        replacementPolicy->touch(blk->replacementData, nullptr);
+    }
+
     /**
      * Find replacement victim based on address. The list of evicted blocks
      * only contains the victim.
