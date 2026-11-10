@@ -66,7 +66,7 @@ A layer is done only when:
 | 1 | L1-D capture + wait-for-commit promotion | implemented, 5/5 equivalence, 2 attacks |
 | 2 | write / atomic / split / SMT correctness | mostly done: writes/atomics/LL-SC, split, per-thread release; secure forbidden; full SMT and snoop open |
 | 3 | shadow-hit serve + request merge | implemented: serve, safe/unsafe split, serve gate, directed harness; 4-cycle policy |
-| 4 | cache hierarchy (L2/L3) | not started; only valid today because SE has no L2 |
+| 4 | cache hierarchy (L2/L3) | partial: lower-level non-allocation + tag A/B; L3 optional; no inclusive install-at-commit |
 | 5 | instruction cache + TLB shadows | not started |
 | 6 | coherence / multicore / TSO | out of scope in the paper; needed for full-system |
 | 7 | transient-speculation (TSA) hardening | partially addressed by overflow-refusal |
@@ -285,6 +285,28 @@ squashed transactions.
 **Exit criteria.** The tests must fail on the current code with `--l2cache` —
 that is the red run, and it is the evidence that Layer 4 is real.
 
+**Status (frontier).** The non-allocation half is implemented:
+
+- The guarded L1 marks `Request::shadowNoAllocate`; every lower cache (no
+  `ShadowCache` of its own) services that fill with `allocate=false`, using
+  the temp block and never inserting a tag.
+- `SPACESPEC_L2_NOALLOC=0` is the red/green A/B.  `SPACESPEC_L3=1` (or
+  `--l3cache`) inserts an L3 below the L2 inside `CacheConfig`, before the
+  L2's mem-side port is bound.
+- `spacespec_shadowhit` with `--l2cache`: `tagsInUse` 2320 (nonalloc) vs 2388
+  (alloc); L3: 2314 vs 2387; output byte-identical.  Lower-level
+  `demandMshrMisses` rises (the lines must be re-fetched), which is the
+  expected cost.
+- **Not implemented: inclusive install-at-commit.**  The L1 owns the promoted
+  line; on L1 eviction it is dropped rather than installed in the L2/L3, so a
+  later access re-fetches.  This is a mostly-inclusive scope, not the paper's
+  full inclusive hierarchy.
+- **Not a valid attack validation:** with `--l2cache`, the L1 Flush+Reload
+  `spectre_v1` no longer leaks even unprotected (the attack itself breaks);
+  `flop_attack` still LEAK/NO-LEAK.  The L2/L3 claim therefore rests on the
+  tag A/B test, not on that attack.  A dedicated L2/L3 Prime+Probe is future
+  work.  Write-target fills also still install normally (known gap).
+
 **Coverage gap.** The paper defers multicore coherence. If L2/L3 are shared
 across cores, I4.4 is not satisfiable without Layer 6; make the scope explicit.
 
@@ -441,12 +463,14 @@ These are built once and used by every layer.
 - Layer 3 is implemented and measured: same-thread younger serve, safe/unsafe
   classification, the `SPACESPEC_SERVE=0` A/B, a fixed 4-cycle policy, no MSHR
   on the serve path, and the `spacespec_shadowhit` directed harness.
-- Layer 4 is now the next layer that requires a deliberate decision: either keep
-  the no-L2 constraint and document it, or implement the paper's
-  non-allocating/filter mechanism. Do not add an L2 and call the result SafeSpec
-  without one of those.
-- Layer 5 is where the paper's scope is broader than the current code; it is a
-  natural follow-on after Layer 4.
+- Layer 4 is partially implemented: the guarded L1 marks shadow fills
+  non-allocating, the L2 and optional L3 honour it, and the tag A/B is the
+  red/green evidence.  The inclusive install-at-commit and a dedicated L2/L3
+  Prime+Probe remain open; the L1 Flush+Reload attack is no longer a valid
+  L2/L3 oracle with `--l2cache`.
+- Layer 5 is the next scope expansion: i-cache and TLB shadows.  The paper's
+  broader level coverage is the natural follow-on after the L1-D hierarchy
+  work, not a replacement for it.
 
 **Do not skip the red runs.** The value of this plan is not the layer list; it
 is that every layer has a test that was shown to fail for the right reason before

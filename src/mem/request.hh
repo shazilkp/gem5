@@ -484,6 +484,14 @@ class Request : public Extensible<Request>
     bool _shadowFill = false;
 
     /**
+     * SpaceSpec: set by the guarded L1 after it accepts a shadow fill, so
+     * every cache below services the fill without installing the line.  A
+     * lower-level allocation would put the speculative line in a level the
+     * L1 shadow key cannot later release.
+     */
+    bool _shadowNoAllocate = false;
+
+    /**
      * SpaceSpec: the sequence number of the load that owns this request's
      * line.  The shadow entry is keyed on this, and it is what commit looks
      * up to promote the line into the cache.
@@ -549,6 +557,7 @@ class Request : public Extensible<Request>
           _extraData(other._extraData), _contextId(other._contextId),
           _pc(other._pc), _reqInstSeqNum(other._reqInstSeqNum),
           _shadowFill(other._shadowFill),
+          _shadowNoAllocate(other._shadowNoAllocate),
           _shadowOwnerSeq(other._shadowOwnerSeq),
           _localAccessor(other._localAccessor),
           translateDelta(other.translateDelta),
@@ -586,6 +595,20 @@ class Request : public Extensible<Request>
     shadowOwnerSeq() const
     {
         return _shadowOwnerSeq;
+    }
+
+    /** Mark a shadow fill as non-allocating in every level below the L1. */
+    void
+    setShadowNoAllocate(bool no_allocate)
+    {
+        _shadowNoAllocate = no_allocate;
+    }
+
+    /** True if lower cache levels must service this fill without allocating. */
+    bool
+    isShadowNoAllocate() const
+    {
+        return _shadowNoAllocate;
     }
 
     /**

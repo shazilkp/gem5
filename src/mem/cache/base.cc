@@ -45,6 +45,8 @@
 
 #include "mem/cache/base.hh"
 
+#include <cstdlib>
+
 #include "base/compiler.hh"
 #include "base/logging.hh"
 #include "debug/Cache.hh"
@@ -69,6 +71,28 @@
 
 namespace gem5
 {
+
+/**
+ * Lower-level non-allocation gate for the Layer 4 A/B.
+ *
+ * Default on: a guarded L1 marks a shadow fill, and every cache below it must
+ * service the fill without installing the line.  Setting SPACESPEC_L2_NOALLOC
+ * to 0 restores the old (leaky) behaviour so the tag-visibility test has a
+ * red run.
+ */
+static bool
+shadowLowerNoAllocEnabled()
+{
+    static const bool enabled = []() {
+        const char *v = std::getenv("SPACESPEC_L2_NOALLOC");
+        if (v == nullptr) {
+            return true;
+        }
+        const std::string s(v);
+        return s != "0" && s != "false" && s != "no";
+    }();
+    return enabled;
+}
 
 BaseCache::CacheResponsePort::CacheResponsePort(const std::string &_name,
                                           BaseCache& _cache,
@@ -472,6 +496,15 @@ BaseCache::recvTimingReq(PacketPtr pkt)
     // the delay provided by the crossbar
     Tick forward_time = clockEdge(forwardLatency) + pkt->headerDelay;
 
+    // The guarded L1 marks a shadow fill so every cache below services it
+    // without installing the line.  The line is owned by the L1 shadow until
+    // commit; a lower-level allocation would make it observable and could not
+    // be released by the L1's commit/squash hooks.
+    if (shadowCache && shadowCache->interceptEnabled() &&
+        pkt->req->isShadowFill() && pkt->isRead()) {
+        pkt->req->setShadowNoAllocate(true);
+    }
+
     if (pkt->cmd == MemCmd::LockedRMWWriteReq) {
         // For LockedRMW accesses, we mark the block inaccessible after the
         // read (see below), to make sure no one gets in before the write.
@@ -688,6 +721,10 @@ BaseCache::recvTimingResp(PacketPtr pkt)
               "secure memory disabled", name());
     }
 
+    const bool lowerShadowNoAlloc =
+        !shadowCache && pkt->req->isShadowNoAllocate() &&
+        shadowLowerNoAllocEnabled();
+
     const bool shadowFill = shadowCache && shadowCache->interceptEnabled() &&
                             is_fill && !is_error &&
                             pkt->req->isShadowFill() && pkt->isRead() &&
@@ -725,7 +762,7 @@ BaseCache::recvTimingResp(PacketPtr pkt)
         // simply not cached at all in that case.
         const bool divert = shadowFill && shadowCache->divertEnabled();
         const bool allocate =
-            divert ? false :
+            (divert || lowerShadowNoAlloc) ? false :
             (writeAllocator && mshr->wasWholeLineWrite) ?
             writeAllocator->allocate() : mshr->allocOnFill();
 
@@ -798,7 +835,8 @@ BaseCache::recvTimingResp(PacketPtr pkt)
             // cache never held, wasting bandwidth and, because it enters the
             // write queue, able to collide with a legitimate fill for the same
             // line.  Just drop it.
-            if (shadowFill && shadowCache->divertEnabled()) {
+            if ((shadowFill && shadowCache->divertEnabled()) ||
+                lowerShadowNoAlloc) {
                 tempBlock->invalidate();
             } else {
                 evictBlock(blk, writebacks);

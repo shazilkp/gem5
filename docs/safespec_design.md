@@ -160,10 +160,11 @@ extends, so its value is workload- and width-dependent rather than intrinsic.
 
 ## 6. Open
 
-- **Full-system coherence.** The measurement configuration has no private L2, so
-  a diverted fill has nothing below it to populate. With a lower level present,
-  the fill still reaches it, and the threat model only holds if nothing below
-  the guarded cache is attacker-observable.
+- **Full-system coherence and inclusion.** The L2/L3 now service shadow fills
+  without allocating, so the line is not installed below the guarded L1.  The
+  paper's inclusive install-at-commit is not implemented: an L1 eviction drops
+  the promoted line and a later access re-fetches.  A shared L2/L3 across
+  cores still needs Layer 6.
 - **Snoop filter.** One *is* active on the crossbar. The mechanism coexists
   because a promoted line is dropped without emitting any packet, so the filter
   is never asked to process an announcement for a line it does not know about.
@@ -186,6 +187,13 @@ extends, so its value is workload- and width-dependent rather than intrinsic.
   unprotected line. The threat model is non-secure memory only.
 - **SMT.** Per-thread release is unit-tested with interleaved global sequence
   numbers; a full two-thread simulation is not yet run.
+- **L2/L3 non-allocation (implemented).** With `--l2cache` and the optional
+  `SPACESPEC_L3=1`, every level below the guarded L1 services a shadow fill
+  without inserting a tag.  The `shadowhit` A/B shows fewer lower-level tags
+  (L2 2320 vs 2388, L3 2314 vs 2387) and a rise in lower-level MSHR misses from
+  refetches.  The L1 Flush+Reload attack is not a valid L2/L3 oracle once an L2
+  is present; the L2/L3 evidence is the tag test.  Inclusive install-at-commit
+  and a dedicated L2/L3 Prime+Probe are future work.
 
 ## References
 

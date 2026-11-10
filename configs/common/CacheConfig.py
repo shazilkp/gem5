@@ -137,7 +137,21 @@ def config_cache(options, system):
 
         system.tol2bus = L2XBar(clk_domain=system.cpu_clk_domain)
         system.l2.cpu_side = system.tol2bus.mem_side_ports
-        system.l2.mem_side = system.membus.cpu_side_ports
+
+        if getattr(options, "l3cache", False):
+            # Optional L3 below the L2.  It must be created here, before the
+            # L2's mem-side port is bound, otherwise the L2 is already
+            # connected to the membus and cannot be re-bound.
+            system.l3 = l2_cache_class(
+                clk_domain=system.cpu_clk_domain,
+                **_get_cache_opts("l3", options)
+            )
+            system.tol3bus = L2XBar(clk_domain=system.cpu_clk_domain)
+            system.l2.mem_side = system.tol3bus.cpu_side_ports
+            system.l3.cpu_side = system.tol3bus.mem_side_ports
+            system.l3.mem_side = system.membus.cpu_side_ports
+        else:
+            system.l2.mem_side = system.membus.cpu_side_ports
 
     if options.memchecker:
         system.memchecker = MemChecker()

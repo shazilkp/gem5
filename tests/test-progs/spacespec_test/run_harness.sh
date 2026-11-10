@@ -33,6 +33,7 @@ GEM5="${1:-build/RISCV/gem5.opt}"
 OUTDIR="${2:-/tmp/spacespec_harness}"
 CONFIG="${SPACESPEC_CONFIG:-configs/example/spacespec.py}"
 TIMEOUT="${TIMEOUT:-300}"
+EXTRA="${EXTRA:-}"
 
 SE=configs/deprecated/example/se.py
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -65,7 +66,7 @@ run_one() {
     local prog="$1" cfg="$2" tag="$3"
     rm -rf "$OUTDIR/$tag"
     timeout "$TIMEOUT" "$GEM5" -d "$OUTDIR/$tag" "$cfg" \
-        --cpu-type=O3CPU --caches --cmd="$prog" \
+        --cpu-type=O3CPU --caches $EXTRA --cmd="$prog" \
         >"$OUTDIR/$tag.console" 2>&1
     local rc=$?
     if [ $rc -eq 124 ]; then
@@ -195,6 +196,57 @@ if [ "$refresh_off" -gt "$refresh" ]; then
 else
     printf "  refresh_drop   FAIL   (refresh on=%s off=%s)\n" \
            "$refresh" "$refresh_off"
+    fail=$((fail+1))
+fi
+
+echo
+echo "== Layer 4: L2/L3 shadow non-allocation =="
+
+# L2: the same shadowhit with --l2cache, with and without lower allocation.
+EXTRA="--l2cache" SPACESPEC_LVP=0 SPACESPEC_L2_NOALLOC=1 \
+    run_one "$BUILD/spacespec_shadowhit" "$CONFIG" shadowhit_l2_on
+EXTRA="--l2cache" SPACESPEC_LVP=0 SPACESPEC_L2_NOALLOC=0 \
+    run_one "$BUILD/spacespec_shadowhit" "$CONFIG" shadowhit_l2_off
+
+l2_on=$(shadow_stat shadowhit_l2_on 'system\.l2\.tags\.tagsInUse$')
+l2_off=$(shadow_stat shadowhit_l2_off 'system\.l2\.tags\.tagsInUse$')
+l2_on_line=$(grep -E '^spacespec_shadowhit done' \
+             "$OUTDIR/shadowhit_l2_on.console" 2>/dev/null)
+l2_off_line=$(grep -E '^spacespec_shadowhit done' \
+              "$OUTDIR/shadowhit_l2_off.console" 2>/dev/null)
+
+printf "  L2 tags        nonalloc=%s alloc=%s\n" "$l2_on" "$l2_off"
+if [ "$l2_on_line" = "$l2_off_line" ] && \
+   awk -v a="$l2_on" -v b="$l2_off" 'BEGIN { exit !(a < b) }'; then
+    printf "  l2_invisible   PASS   (non-allocating L2 holds fewer tags)\n"
+else
+    printf "  l2_invisible   FAIL   (tags %s/%s, output equal=%s)\n" \
+           "$l2_on" "$l2_off" \
+           "$([ "$l2_on_line" = "$l2_off_line" ] && echo yes || echo no)"
+    fail=$((fail+1))
+fi
+
+# L3: optional, inserted below L2 by SPACESPEC_L3=1.
+EXTRA="--l2cache" SPACESPEC_L3=1 SPACESPEC_LVP=0 SPACESPEC_L2_NOALLOC=1 \
+    run_one "$BUILD/spacespec_shadowhit" "$CONFIG" shadowhit_l3_on
+EXTRA="--l2cache" SPACESPEC_L3=1 SPACESPEC_LVP=0 SPACESPEC_L2_NOALLOC=0 \
+    run_one "$BUILD/spacespec_shadowhit" "$CONFIG" shadowhit_l3_off
+
+l3_on=$(shadow_stat shadowhit_l3_on 'system\.l3\.tags\.tagsInUse$')
+l3_off=$(shadow_stat shadowhit_l3_off 'system\.l3\.tags\.tagsInUse$')
+l3_on_line=$(grep -E '^spacespec_shadowhit done' \
+             "$OUTDIR/shadowhit_l3_on.console" 2>/dev/null)
+l3_off_line=$(grep -E '^spacespec_shadowhit done' \
+              "$OUTDIR/shadowhit_l3_off.console" 2>/dev/null)
+
+printf "  L3 tags        nonalloc=%s alloc=%s\n" "$l3_on" "$l3_off"
+if [ "$l3_on_line" = "$l3_off_line" ] && \
+   awk -v a="$l3_on" -v b="$l3_off" 'BEGIN { exit !(a < b) }'; then
+    printf "  l3_invisible   PASS   (non-allocating L3 holds fewer tags)\n"
+else
+    printf "  l3_invisible   FAIL   (tags %s/%s, output equal=%s)\n" \
+           "$l3_on" "$l3_off" \
+           "$([ "$l3_on_line" = "$l3_off_line" ] && echo yes || echo no)"
     fail=$((fail+1))
 fi
 

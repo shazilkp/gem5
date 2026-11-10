@@ -50,17 +50,20 @@ two independent parameter assignments.
 
 Threat model
 ------------
-``se.py --caches`` builds a private L1I and L1D and *no* L2 (``CacheConfig``
-only creates ``system.l2`` under ``--l2cache``), so the L1-D is the only cache
-that can leak a speculative line.  A full-system run with a private L2 would
-need that removed, or the claim does not hold: a diverted fill still populates
-the level below.
+``se.py --caches`` builds a private L1I and L1D.  A speculative fill is
+marked non-allocating below the guarded L1, so ``--l2cache`` (and the optional
+``SPACESPEC_L3=1``) service the fill without installing the line; the L1 owns
+it until commit.  The lower levels remain attacker-observable for
+non-speculative lines, which is outside this mechanism's guarantee.
 
 Environment
 -----------
 SPACESPEC_ENTRIES   shadow entries (default 64, SafeSpec Fig. 3)
 SPACESPEC_LVP       0 disables the Load Value Predictor (default 1)
 SPACESPEC_SERVE     0 disables the Layer 3 shadow-hit serve (default 1)
+SPACESPEC_L3        1 inserts an L3 below the L2 (requires --l2cache)
+SPACESPEC_L2_NOALLOC
+                    0 lets the L2/L3 allocate shadow fills (A/B control)
 
 Secure memory is not supported: the shadow key has no secure bit, so a
 secure speculative fill is a fatal configuration error rather than a
@@ -82,17 +85,28 @@ from m5.objects import ShadowCache  # noqa: E402
 
 NUM_ENTRIES = int(os.environ.get("SPACESPEC_ENTRIES", "64"))
 LVP_ENABLED = os.environ.get("SPACESPEC_LVP", "1") not in ("0", "false", "no")
+L3_ENABLED = os.environ.get("SPACESPEC_L3", "0") not in ("0", "false", "no")
 
 _real_config_cache = CacheConfig.config_cache
 
 
 def _spacespec_config_cache(options, system):
     """Build the caches, then attach a shadow cache to each L1-D and CPU."""
+    if L3_ENABLED:
+        if not options.l2cache:
+            sys.exit("SPACESPEC_L3=1 requires --l2cache: the L3 sits below "
+                     "the L2 in this hierarchy.")
+        options.l3cache = True
+
     _real_config_cache(options, system)
 
     if not options.caches:
         sys.exit("spacespec.py requires --caches: SpaceSpec protects a private "
                  "L1-D, and without one there is nothing to protect.")
+
+    if L3_ENABLED:
+        print("[spacespec] L3 inserted by CacheConfig (size=%s)"
+              % options.l3_size)
 
     for cpu in system.cpu:
         shadow = ShadowCache(
