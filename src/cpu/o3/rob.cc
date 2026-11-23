@@ -469,6 +469,13 @@ ROB::squash(InstSeqNum squash_num, ThreadID tid)
                                       cpu->getContext(tid)->contextId());
     }
 
+    // ---- EgDiff: drop speculative GVQ state for squashed loads ----
+    // Only the speculative queue is rolled back; the committed NVQ and the
+    // prediction table deliberately survive a squash.
+    if (cpu->lvp && cpu->lvp->isEnabled() && cpu->lvp->isEgDiff()) {
+        cpu->lvp->squashFrom(squash_num);
+    }
+
     if (isEmpty(tid)) {
         DPRINTF(ROB, "Does not need to squash due to being empty "
                 "[sn:%llu]\n",

@@ -1181,7 +1181,8 @@ LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
     // ---- LVP: Verify prediction at load writeback ----
     if (inst->isLoad() && inst->lvpPredicted() &&
         !inst->lvpIsVerified() && inst->fault == NoFault &&
-        cpu->lvp && cpu->lvp->isEnabled()) {
+        cpu->lvp && cpu->lvp->isEnabled() &&
+        !cpu->lvp->isEgDiff()) {
 
         inst->lvpSetVerified();
 
@@ -1244,7 +1245,8 @@ LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
     // Also update the LVPT for non-predicted loads (training)
     if (inst->isLoad() && !inst->lvpPredicted() &&
         inst->fault == NoFault &&
-        cpu->lvp && cpu->lvp->isEnabled()) {
+        cpu->lvp && cpu->lvp->isEnabled() &&
+        !cpu->lvp->isEgDiff()) {
 
         ThreadID tid = inst->threadNumber;
         Addr instPC = inst->pcState().instAddr();
@@ -1263,6 +1265,45 @@ LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
         cpu->lvp->trainLoad(tid, instPC, actualVal);
     }
     // ---- End LVP ----
+
+    // ---- EgDiff: complete-load verification / deferred wakeup ----
+    //
+    // Every tracked load reports its actual value so the speculative GVQ can
+    // record it (enabling deferred wakeups for younger dependent loads) and
+    // verify any prediction.  On a mismatch the load (and younger
+    // instructions) are squashed; the non-speculative NVQ / predictor table
+    // are updated only when the re-fetched load commits, which is what makes
+    // the trained entry survive a misprediction.
+    if (inst->isLoad() && inst->fault == NoFault &&
+        cpu->lvp && cpu->lvp->isEnabled() && cpu->lvp->isEgDiff() &&
+        !inst->lvpIsVerified()) {
+
+        inst->lvpSetVerified();
+
+        ThreadID ltid = inst->threadNumber;
+        RegVal actualVal = 0;
+        if (inst->numDestRegs() > 0) {
+            PhysRegIdPtr destReg = inst->renamedDestIdx(0);
+            if (destReg && !destReg->is(InvalidRegClass))
+                actualVal = cpu->getReg(destReg, ltid);
+        }
+
+        void *wakeRaw = nullptr;
+        lvp::EgDiffPredictResult wakeRes;
+        bool ok = cpu->lvp->completeLoad(inst->seqNum, actualVal,
+                                         wakeRaw, wakeRes);
+
+        if (!ok) {
+            DPRINTF(LVP, "[tid:%d] EgDiff MISMATCH: PC %s [sn:%llu] "
+                    "actual=%#x -> SQUASH\n", ltid, inst->pcState(),
+                    inst->seqNum, actualVal);
+            iewStage->squashDueToMemOrder(inst, ltid);
+        } else if (wakeRaw) {
+            iewStage->lvpWakeDeferred(static_cast<DynInst *>(wakeRaw),
+                                      wakeRes.value);
+        }
+    }
+    // ---- End EgDiff ----
 
     // see if this load changed the PC
     iewStage->checkMisprediction(inst);

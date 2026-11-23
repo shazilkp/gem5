@@ -1020,6 +1020,32 @@ Commit::commitInsts()
                     cpu->shadowCache->promote(head_inst->seqNum);
                 }
 
+                // ---- EgDiff (ISCA 2026): commit-stage distance polling ----
+                // The Prediction Table is written only here.  This is what
+                // preserves the trained entry across branch squashes and what
+                // makes the NVQ (not the speculative queue) hold the value of
+                // an already-committed load.
+                if (cpu->lvp && cpu->lvp->isEnabled() &&
+                    cpu->lvp->isEgDiff() && head_inst->isLoad()) {
+                    if (head_inst->fault == NoFault) {
+                        ThreadID ltid = head_inst->threadNumber;
+                        RegVal committedVal = 0;
+                        if (head_inst->numDestRegs() > 0) {
+                            PhysRegIdPtr destReg =
+                                head_inst->renamedDestIdx(0);
+                            if (destReg && !destReg->is(InvalidRegClass))
+                                committedVal = cpu->getReg(destReg, ltid);
+                        }
+                        cpu->lvp->commitLoad(head_inst->seqNum,
+                                             head_inst->pcState().instAddr(),
+                                             committedVal);
+                    } else {
+                        // Faulting load: do not train the table, but still pop
+                        // its speculative GVQ slot so it cannot linger.
+                        cpu->lvp->retireLoad(head_inst->seqNum);
+                    }
+                }
+
                 // Set the doneSeqNum to the youngest committed instruction.
                 toIEW->commitInfo[tid].doneSeqNum = head_inst->seqNum;
 
