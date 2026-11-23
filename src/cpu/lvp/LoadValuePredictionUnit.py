@@ -60,6 +60,24 @@ class LoadValuePredictionUnit(SimObject):
 
     enabled = Param.Bool(True, "Enable the LVP")
 
+    predictorType = Param.String(
+        "flop", "LVP model: 'flop' (Apple M3 constant LVP) or 'egdiff' "
+        "(ISCA 2026 global value predictor)"
+    )
+
+    # ---- EgDiff (global value predictor) parameters ----
+    egdiffTableEntries = Param.Unsigned(
+        4096, "EgDiff prediction table entries (must be a power of 2)"
+    )
+    egdiffSeed = Param.Unsigned(
+        1, "EgDiff deterministic PRNG seed (FPC / allocation)"
+    )
+    egdiffColdDeterministicAlloc = Param.Bool(
+        False,
+        "Allocate a cold u==0 entry with probability 1.0 instead of 1/16 "
+        "(Layer-1 unit testing convenience; NOT the modelled hardware)"
+    )
+
     lct = Param.LoadClassificationTable(
         LoadClassificationTable(), "Load Classification Table"
     )

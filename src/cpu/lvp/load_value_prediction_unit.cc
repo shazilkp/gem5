@@ -6,6 +6,7 @@
 
 #include "base/logging.hh"
 #include "base/trace.hh"
+#include "debug/EgDiff.hh"
 #include "debug/LVP.hh"
 
 namespace gem5
@@ -19,9 +20,24 @@ LoadValuePredictionUnit::LoadValuePredictionUnit(const Params &p)
       lvpt(p.lvpt),
       cvu(p.cvu),
       enabled(p.enabled),
+      predictorType(p.predictorType),
       stats(this)
 {
-    DPRINTF(LVP, "LVP Unit created: enabled=%d\n", enabled);
+    if (predictorType == "egdiff") {
+        egdiffPredictor = std::make_unique<EgDiffPredictor>(
+            p.egdiffTableEntries, p.egdiffSeed,
+            p.egdiffColdDeterministicAlloc);
+        DPRINTF(EgDiff, "EgDiff predictor created: %u table entries, "
+                "order n=%u, seed=%u, coldDeterministicAlloc=%d\n",
+                p.egdiffTableEntries, EgDiffPredictor::ORDER_N,
+                p.egdiffSeed, p.egdiffColdDeterministicAlloc);
+    } else if (predictorType != "flop") {
+        fatal("LoadValuePredictionUnit: unknown predictorType '%s' "
+              "(expected 'flop' or 'egdiff')", predictorType);
+    }
+
+    DPRINTF(LVP, "LVP Unit created: enabled=%d type=%s\n",
+            enabled, predictorType);
 }
 
 LoadValuePredictionUnit::LVPStats::LVPStats(LoadValuePredictionUnit *lvpu)
@@ -43,7 +59,35 @@ LoadValuePredictionUnit::LVPStats::LVPStats(LoadValuePredictionUnit *lvpu)
       ADD_STAT(num8ByteZeroPredictions, statistics::units::Count::get(),
                "8-byte loads where zero was predicted"),
       ADD_STAT(numSuppressed, statistics::units::Count::get(),
-               "Predictions suppressed (8-byte non-zero)")
+               "Predictions suppressed (8-byte non-zero)"),
+      ADD_STAT(egdiffCommits, statistics::units::Count::get(),
+               "EgDiff: committed loads trained at the commit stage"),
+      ADD_STAT(egdiffTableAllocations, statistics::units::Count::get(),
+               "EgDiff: prediction-table entries allocated (tag mismatch)"),
+      ADD_STAT(egdiffPollingSteps, statistics::units::Count::get(),
+               "EgDiff: Algorithm-1 distance-polling mismatch steps"),
+      ADD_STAT(egdiffStrideMatches, statistics::units::Count::get(),
+               "EgDiff: Algorithm-1 stride matches at the current distance"),
+      ADD_STAT(egdiffFpcIncrements, statistics::units::Count::get(),
+               "EgDiff: forward-probabilistic-counter increments"),
+      ADD_STAT(egdiffTickDecays, statistics::units::Count::get(),
+               "EgDiff: 10-bit TICK usefulness decay events"),
+      ADD_STAT(egdiffPredictions, statistics::units::Count::get(),
+               "EgDiff: values forwarded at dispatch (normal prediction)"),
+      ADD_STAT(egdiffDeferredBindings, statistics::units::Count::get(),
+               "EgDiff: deferred-prediction wake bindings created"),
+      ADD_STAT(egdiffDeferredPredictions, statistics::units::Count::get(),
+               "EgDiff: deferred predictions fired on base completion"),
+      ADD_STAT(egdiffDeferredIgnored, statistics::units::Count::get(),
+               "EgDiff: deferred wakeups discarded (dependent already done)"),
+      ADD_STAT(egdiffNVQBases, statistics::units::Count::get(),
+               "EgDiff: predictions whose base came from the committed NVQ"),
+      ADD_STAT(egdiffWakeCleared, statistics::units::Count::get(),
+               "EgDiff: Wake bindings cleared because the target was squashed"),
+      ADD_STAT(egdiffLastMispSuppressed, statistics::units::Count::get(),
+               "EgDiff: predictions suppressed by the 1024-inst lastMisp"),
+      ADD_STAT(egdiffSquashed, statistics::units::Count::get(),
+               "EgDiff: speculative entries discarded by ROB squash")
 {
 }
 
@@ -71,6 +115,11 @@ LoadValuePredictionUnit::predictLoad(ThreadID tid, Addr instPC,
     result.valid = false;
 
     if (!enabled)
+        return result;
+
+    // EgDiff predictions are issued by dispatchLoad() (it needs the DynInst
+    // sequence number and the speculative GVQ), not by this FLOP entry point.
+    if (isEgDiff())
         return result;
 
     ++stats.totalLoads;
@@ -188,7 +237,155 @@ LoadValuePredictionUnit::processStoreAddress(ThreadID tid, Addr storeAddr)
     if (!enabled)
         return;
 
+    // The CVU only exists to invalidate FLOP constant predictions on a
+    // matching store; EgDiff re-verifies every load at completion and so
+    // needs no store-side invalidation.
+    if (isEgDiff())
+        return;
+
     cvu->processStoreAddress(tid, storeAddr);
+}
+
+// ==========================================================================
+//  EgDiff glue
+// ==========================================================================
+
+void
+LoadValuePredictionUnit::commitLoad(uint64_t seqNum, Addr instPC,
+                                    RegVal actualVal)
+{
+    if (!egdiffPredictor)
+        return;
+
+    const EgDiffCommitResult r =
+        egdiffPredictor->commitLoad(instPC, actualVal);
+
+    ++stats.egdiffCommits;
+    if (r.allocated)
+        ++stats.egdiffTableAllocations;
+    if (r.polled)
+        ++stats.egdiffPollingSteps;
+    if (r.strideMatched)
+        ++stats.egdiffStrideMatches;
+    if (r.fpcIncremented)
+        ++stats.egdiffFpcIncrements;
+    if (r.tickDecayed)
+        ++stats.egdiffTickDecays;
+
+    DPRINTF(EgDiff, "[sn:%llu] commit PC %#x val %#x idx %u tag %#x | "
+            "match=%d alloc=%d poll=%d stride=%d fpc=%d | "
+            "d %u->%u diff %#x->%#x ctr=%u u=%u tickDecay=%d\n",
+            seqNum, instPC, actualVal, EgDiffPredictor::indexHash(instPC),
+            EgDiffPredictor::tagHash(instPC), r.tagMatched, r.allocated,
+            r.polled, r.strideMatched, r.fpcIncremented, r.oldDistance,
+            r.newDistance, r.oldDiff, r.newDiff, r.newCtr, r.newU,
+            r.tickDecayed);
+
+    // The load is now committed: it may leave the speculative queue.
+    egdiffPredictor->retireFront(seqNum);
+}
+
+EgDiffPredictResult
+LoadValuePredictionUnit::dispatchLoad(uint64_t seqNum, Addr instPC,
+                                      void *inst)
+{
+    if (!egdiffPredictor)
+        return EgDiffPredictResult();
+
+    if (egdiffPredictor->predictionSuppressed(seqNum))
+        ++stats.egdiffLastMispSuppressed;
+
+    const EgDiffPredictResult r =
+        egdiffPredictor->dispatchLoad(instPC, seqNum, inst);
+
+    if (r.valid) {
+        ++stats.egdiffPredictions;
+        if (r.nvqBase)
+            ++stats.egdiffNVQBases;
+        DPRINTF(EgDiff, "[sn:%llu] dispatch PC %#x predicts %#x "
+                "(d=%u, base=%s)\n", seqNum, instPC, r.value, r.distance,
+                r.nvqBase ? "nvq" : "specgvq");
+    } else if (r.deferred) {
+        ++stats.egdiffDeferredBindings;
+        DPRINTF(EgDiff, "[sn:%llu] dispatch PC %#x deferred (d=%u)\n",
+                seqNum, instPC, r.distance);
+    }
+
+    return r;
+}
+
+bool
+LoadValuePredictionUnit::completeLoad(uint64_t seqNum, RegVal actualVal,
+                                      void *&wakeInst,
+                                      EgDiffPredictResult &wakeResult)
+{
+    wakeInst = nullptr;
+    wakeResult = EgDiffPredictResult();
+
+    if (!egdiffPredictor)
+        return true;
+
+    const EgDiffCompleteResult r = egdiffPredictor->completeLoad(seqNum,
+                                                                 actualVal);
+
+    if (r.verified) {
+        if (!r.ok) {
+            ++stats.numPredictionIncorrect;
+            DPRINTF(EgDiff, "[sn:%llu] MISMATCH actual %#x -> squash, "
+                    "suppress until %#llx\n", seqNum, actualVal,
+                    (unsigned long long)egdiffPredictor->getSuppressUntil());
+        } else {
+            ++stats.numPredictionCorrect;
+            DPRINTF(EgDiff, "[sn:%llu] verified actual %#x\n",
+                    seqNum, actualVal);
+        }
+    } else {
+        DPRINTF(EgDiff, "[sn:%llu] completion actual %#x (no prediction)\n",
+                seqNum, actualVal);
+    }
+
+    if (r.wakeTarget) {
+        ++stats.egdiffDeferredPredictions;
+        wakeInst = r.wakeTarget->inst;
+        wakeResult = r.wake;
+        DPRINTF(EgDiff, "[sn:%llu] deferred wakeup -> publish %#x to "
+                "dependent PC %#x [dep:%llu] (d=%u)\n", seqNum, r.wake.value,
+                r.wakeTarget->pc, (unsigned long long)r.wakeTarget->seqNum,
+                r.wakeTarget->distance);
+    } else if (r.wakeIgnored) {
+        ++stats.egdiffDeferredIgnored;
+        DPRINTF(EgDiff, "[sn:%llu] deferred wakeup ignored "
+                "(dependent [dep:%llu] already completed)\n",
+                seqNum, (unsigned long long)r.wakeIgnoredSeq);
+    }
+
+    return r.ok;
+}
+
+void
+LoadValuePredictionUnit::squashFrom(uint64_t squashNum)
+{
+    if (!egdiffPredictor)
+        return;
+
+    const size_t before = egdiffPredictor->specGVQSize();
+    const unsigned cleared = egdiffPredictor->squashFrom(squashNum);
+    const size_t after = egdiffPredictor->specGVQSize();
+    if (before != after)
+        stats.egdiffSquashed += (before - after);
+    if (cleared)
+        stats.egdiffWakeCleared += cleared;
+
+    DPRINTF(EgDiff, "squashFrom sn:%llu dropped %u speculative entries, "
+            "cleared %u wake bindings\n", squashNum,
+            (unsigned)(before - after), cleared);
+}
+
+void
+LoadValuePredictionUnit::retireLoad(uint64_t seqNum)
+{
+    if (egdiffPredictor)
+        egdiffPredictor->retireFront(seqNum);
 }
 
 void

@@ -17,11 +17,15 @@
 #include "base/statistics.hh"
 #include "base/types.hh"
 #include "cpu/lvp/constant_verification_unit.hh"
+#include "cpu/lvp/egdiff_predictor.hh"
 #include "cpu/lvp/load_classification_table.hh"
 #include "cpu/lvp/load_value_prediction_table.hh"
 #include "cpu/lvp/lvp_enums.hh"
 #include "params/LoadValuePredictionUnit.hh"
 #include "sim/sim_object.hh"
+
+#include <memory>
+#include <string>
 
 namespace gem5
 {
@@ -95,6 +99,50 @@ class LoadValuePredictionUnit : public SimObject
     /** Whether LVP is enabled. */
     bool isEnabled() const { return enabled; }
 
+    /** Whether the EgDiff global predictor (rather than FLOP) is selected. */
+    bool isEgDiff() const { return predictorType == "egdiff"; }
+
+    // =================================================================
+    //  EgDiff (ISCA 2026) glue.  All in-flight instructions are referred
+    //  to by (seqNum, opaque DynInst*) so that this header stays free of
+    //  the O3CPU headers.
+    // =================================================================
+
+    /**
+     * Commit-stage update (Layer 1): run Algorithm 1 (distance polling),
+     * the TICK decay and push the committed value into the NVQ.  The
+     * Prediction Table is written only here.
+     */
+    void commitLoad(uint64_t seqNum, Addr instPC, RegVal actualVal);
+
+    /**
+     * Dispatch-stage prediction (Layer 2/3): allocate a Speculative GVQ
+     * slot and, if the base value is ready, forward a predicted value.
+     */
+    EgDiffPredictResult dispatchLoad(uint64_t seqNum, Addr instPC,
+                                     void *inst);
+
+    /**
+     * Load-completion hook (Layer 2/3): record the actual value, verify
+     * any prediction, and fire a deferred wakeup if this load is a bound
+     * base.  Returns ok == false when the caller must squash.
+     *
+     * @param wakeInst   [out] DynInst* of the dependent that must be woken
+     *                   (nullptr if none).
+     * @param wakeResult [out] prediction value to forward to that dependent.
+     */
+    bool completeLoad(uint64_t seqNum, RegVal actualVal,
+                      void *&wakeInst, EgDiffPredictResult &wakeResult);
+
+    /** Drop speculative state younger than a squash bound (ROB squash). */
+    void squashFrom(uint64_t squashNum);
+
+    /** Pop a committed load from the front of the speculative queue. */
+    void retireLoad(uint64_t seqNum);
+
+    /** Accessor for tracing. */
+    const EgDiffPredictor *egdiff() const { return egdiffPredictor.get(); }
+
   private:
     /** Check if the load is eligible for prediction per FLOP rules. */
     bool isEligible(unsigned loadSize, RegVal value) const;
@@ -104,6 +152,8 @@ class LoadValuePredictionUnit : public SimObject
     ConstantVerificationUnit *cvu;
 
     const bool enabled;
+    const std::string predictorType;
+    std::unique_ptr<EgDiffPredictor> egdiffPredictor;
 
     struct LVPStats : public statistics::Group
     {
@@ -117,6 +167,22 @@ class LoadValuePredictionUnit : public SimObject
         statistics::Scalar numTrainIncorrect;
         statistics::Scalar num8ByteZeroPredictions;
         statistics::Scalar numSuppressed;
+
+        // ---- EgDiff statistics ----
+        statistics::Scalar egdiffCommits;
+        statistics::Scalar egdiffTableAllocations;
+        statistics::Scalar egdiffPollingSteps;
+        statistics::Scalar egdiffStrideMatches;
+        statistics::Scalar egdiffFpcIncrements;
+        statistics::Scalar egdiffTickDecays;
+        statistics::Scalar egdiffPredictions;
+        statistics::Scalar egdiffDeferredBindings;
+        statistics::Scalar egdiffDeferredPredictions;
+        statistics::Scalar egdiffDeferredIgnored;
+        statistics::Scalar egdiffNVQBases;
+        statistics::Scalar egdiffWakeCleared;
+        statistics::Scalar egdiffLastMispSuppressed;
+        statistics::Scalar egdiffSquashed; 
     } stats;
 };
 
