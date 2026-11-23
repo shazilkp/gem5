@@ -13,11 +13,13 @@ if env['CONF']['BUILD_ISA']:
     Source('load_classification_table.cc')
     Source('load_value_prediction_table.cc')
     Source('constant_verification_unit.cc')
+    Source('egdiff_predictor.cc')
     Source('load_value_prediction_unit.cc')
 
     DebugFlag('LCT')
     DebugFlag('LVPT')
     DebugFlag('CVU')
     DebugFlag('LVP')
+    DebugFlag('EgDiff')
 
-    CompoundFlag('LVPAll', ['LCT', 'LVPT', 'CVU', 'LVP'])
+    CompoundFlag('LVPAll', ['LCT', 'LVPT', 'CVU', 'LVP', 'EgDiff'])
