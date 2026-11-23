@@ -331,6 +331,18 @@ class InstructionQueue
     /** Wakes all dependents of a completed instruction. */
     int wakeDependents(const DynInstPtr &completed_inst);
 
+    /**
+     * Wake only the register dependents of an instruction that has not
+     * actually executed yet (used by the EgDiff deferred-value wakeup).
+     * Unlike wakeDependents(), this does not complete the memory access or
+     * clear the instruction from the issue queue.
+     *
+     * @param isDeferred  true when called before the load's real writeback.
+     *   In that case pinned-register bookkeeping is left for the real
+     *   writeback and pinned destinations are not woken early.
+     */
+    int wakeRegDependents(DynInst *completed_inst, bool isDeferred = false);
+
     /** Adds a ready memory instruction to the ready list. */
     void addReadyMemInst(const DynInstPtr &ready_inst);
 

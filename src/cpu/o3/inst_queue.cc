@@ -1073,8 +1073,6 @@ InstructionQueue::commit(const InstSeqNum &inst, ThreadID tid)
 int
 InstructionQueue::wakeDependents(const DynInstPtr &completed_inst)
 {
-    int dependents = 0;
-
     // The instruction queue here takes care of both floating and int ops
     if (completed_inst->isFloating()) {
         iqIOStats.fpInstQueueWakeupAccesses++;
@@ -1108,6 +1106,14 @@ InstructionQueue::wakeDependents(const DynInstPtr &completed_inst)
         memDepUnit[tid].completeInst(completed_inst);
     }
 
+    return wakeRegDependents(completed_inst.get());
+}
+
+int
+InstructionQueue::wakeRegDependents(DynInst *completed_inst, bool isDeferred)
+{
+    int dependents = 0;
+
     for (int dest_reg_idx = 0;
          dest_reg_idx < completed_inst->numDestRegs();
          dest_reg_idx++)
@@ -1123,15 +1129,30 @@ InstructionQueue::wakeDependents(const DynInstPtr &completed_inst)
             continue;
         }
 
-        // Avoid waking up dependents if the register is pinned
-        dest_reg->decrNumPinnedWritesToComplete();
-        if (dest_reg->isPinned())
-            completed_inst->setPinnedRegsWritten();
+        if (isDeferred) {
+            // A deferred value wakeup happens before the load has written its
+            // register.  Leave the pinned-write accounting (and any pinned
+            // destination) for the real writeback, otherwise the write and
+            // completion counters would be decremented twice and DynInst
+            // squash recovery would be perturbed.
+            if (dest_reg->isPinned() ||
+                dest_reg->getNumPinnedWritesToComplete() != 1) {
+                continue;
+            }
+        } else {
+            // Avoid waking up dependents if the register is pinned.  Guard the
+            // decrement so a deferred wakeup followed by the real writeback
+            // does not underflow the counter to -1.
+            if (dest_reg->getNumPinnedWritesToComplete() > 0)
+                dest_reg->decrNumPinnedWritesToComplete();
+            if (dest_reg->isPinned())
+                completed_inst->setPinnedRegsWritten();
 
-        if (dest_reg->getNumPinnedWritesToComplete() != 0) {
-            DPRINTF(IQ, "Reg %d [%s] is pinned, skipping\n",
-                    dest_reg->index(), dest_reg->className());
-            continue;
+            if (dest_reg->getNumPinnedWritesToComplete() != 0) {
+                DPRINTF(IQ, "Reg %d [%s] is pinned, skipping\n",
+                        dest_reg->index(), dest_reg->className());
+                continue;
+            }
         }
 
         DPRINTF(IQ, "Waking any dependents on register %i (%s).\n",

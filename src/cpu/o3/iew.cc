@@ -495,6 +495,33 @@ IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid)
 }
 
 void
+IEW::lvpWakeDeferred(DynInst *inst, RegVal value)
+{
+    ThreadID tid = inst->threadNumber;
+
+    DPRINTF(LVP, "[tid:%i] EgDiff deferred wakeup: PC %s [sn:%llu] -> "
+            "forward val %#x\n", tid, inst->pcState(), inst->seqNum, value);
+
+    if (inst->numDestRegs() > 0) {
+        PhysRegIdPtr destReg = inst->renamedDestIdx(0);
+        if (destReg && !destReg->is(InvalidRegClass)) {
+            // A pinned destination must wait for its real writeback; do not
+            // forward early (and do not perturb the pin bookkeeping).
+            if (!destReg->isPinned()) {
+                cpu->setReg(destReg, value, tid);
+                scoreboard->setReg(destReg);
+            }
+        }
+    }
+
+    inst->setLVPPrediction(lvp::LVPClassification::Constant, value);
+
+    // Wake only the register dependents; the load itself still executes and
+    // verifies normally in the load queue.
+    instQueue.wakeRegDependents(inst, /*isDeferred=*/true);
+}
+
+void
 IEW::squashDueToMemOrder(const DynInstPtr& inst, ThreadID tid)
 {
     DPRINTF(IEW, "[tid:%i] Memory violation, squashing violator and younger "
@@ -1024,39 +1051,69 @@ IEW::dispatchInsts(ThreadID tid)
             // ---- LVP: Predict load value at dispatch ----
             if (cpu->lvp && cpu->lvp->isEnabled()) {
                 Addr instPC = inst->pcState().instAddr();
-                // effSize is 0 at dispatch (set during execute).
-                // Pass 0 to skip the size-based eligibility check
-                // at prediction time; it will be enforced at
-                // verification time when effSize is known.
-                unsigned loadSize = 0;
 
-                auto result = cpu->lvp->predictLoad(
-                    tid, instPC, loadSize);
+                if (cpu->lvp->isEgDiff()) {
+                    // EgDiff: every candidate load allocates a speculative
+                    // GVQ slot; a value is forwarded only when the base load
+                    // at the trained distance already has a value.
+                    auto result = cpu->lvp->dispatchLoad(
+                        inst->seqNum, instPC, inst.get());
 
-                if (result.valid &&
-                    result.classification ==
-                        lvp::LVPClassification::Constant) {
-                    // Store prediction in the instruction
-                    inst->setLVPPrediction(
-                        result.classification,
-                        result.predictedValue);
+                    if (result.valid) {
+                        inst->setLVPPrediction(
+                            lvp::LVPClassification::Constant, result.value);
 
-                    // Forward predicted value to dest register
-                    if (inst->numDestRegs() > 0) {
-                        PhysRegIdPtr destReg =
-                            inst->renamedDestIdx(0);
-                        if (destReg &&
-                            !destReg->is(InvalidRegClass)) {
-                            cpu->setReg(destReg,
-                                result.predictedValue, tid);
-                            scoreboard->setReg(destReg);
+                        if (inst->numDestRegs() > 0) {
+                            PhysRegIdPtr destReg = inst->renamedDestIdx(0);
+                            if (destReg &&
+                                !destReg->is(InvalidRegClass)) {
+                                cpu->setReg(destReg, result.value, tid);
+                                scoreboard->setReg(destReg);
 
-                            DPRINTF(LVP, "[tid:%d] LVP dispatch: "
-                                "PC %#x [sn:%llu] forwarding "
-                                "predicted val %#x to %s\n",
-                                tid, instPC, inst->seqNum,
-                                result.predictedValue,
-                                destReg->className());
+                                DPRINTF(LVP, "[tid:%d] EgDiff dispatch: "
+                                    "PC %#x [sn:%llu] forwarding "
+                                    "predicted val %#x (d=%u) to %s\n",
+                                    tid, instPC, inst->seqNum,
+                                    result.value, result.distance,
+                                    destReg->className());
+                            }
+                        }
+                    }
+                } else {
+                    // effSize is 0 at dispatch (set during execute).
+                    // Pass 0 to skip the size-based eligibility check
+                    // at prediction time; it will be enforced at
+                    // verification time when effSize is known.
+                    unsigned loadSize = 0;
+
+                    auto result = cpu->lvp->predictLoad(
+                        tid, instPC, loadSize);
+
+                    if (result.valid &&
+                        result.classification ==
+                            lvp::LVPClassification::Constant) {
+                        // Store prediction in the instruction
+                        inst->setLVPPrediction(
+                            result.classification,
+                            result.predictedValue);
+
+                        // Forward predicted value to dest register
+                        if (inst->numDestRegs() > 0) {
+                            PhysRegIdPtr destReg =
+                                inst->renamedDestIdx(0);
+                            if (destReg &&
+                                !destReg->is(InvalidRegClass)) {
+                                cpu->setReg(destReg,
+                                    result.predictedValue, tid);
+                                scoreboard->setReg(destReg);
+
+                                DPRINTF(LVP, "[tid:%d] LVP dispatch: "
+                                    "PC %#x [sn:%llu] forwarding "
+                                    "predicted val %#x to %s\n",
+                                    tid, instPC, inst->seqNum,
+                                    result.predictedValue,
+                                    destReg->className());
+                            }
                         }
                     }
                 }

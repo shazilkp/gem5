@@ -245,6 +245,16 @@ class IEW
      */
     void squashDueToMemOrder(const DynInstPtr &inst, ThreadID tid);
 
+    /**
+     * EgDiff deferred prediction wakeup.  Forwards a value to a load that
+     * has already been renamed (so it is already sitting in the issue queue
+     * or load queue): write the value into its destination physical register,
+     * mark it ready on the scoreboard, and wake its register dependents.
+     * Only the register dependency is woken; the load itself still executes
+     * and completes normally in the LQ.
+     */
+    void lvpWakeDeferred(DynInst *inst, RegVal value);
+
   private:
     /** Sends commit proper information for a squash due to a branch
      * mispredict.
