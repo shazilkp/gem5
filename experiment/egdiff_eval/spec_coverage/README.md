@@ -110,10 +110,10 @@ paper's own motivating shape, hence high coverage), the other three average
 **22.9% coverage** (23.0% from unrounded values), at the lower edge of the
 paper's reported 22–26%, with accuracy 99.5–99.8% against the paper's >99%.
 The fifth attempted benchmark, `531.deepsjeng`, is excluded from both means: a
-30M-instruction pilot measured **95.35% accuracy** while the window was still
-zeroing a 720 MB hash table; including it would move the four-benchmark mean
-accuracy from 99.73% to 98.9%. The exclusion is a workload-shape choice, not a
-filter on the attack.
+30M-instruction pilot measured **2.29% coverage / 95.35% accuracy** (22,357
+committed loads) while the window was still zeroing a 720 MB hash table;
+including it gives a five-benchmark unweighted mean of **27.11% / 98.85%**. The
+exclusion is a workload-shape choice, not a filter on the attack.
 
 Raw per-benchmark rows are checked in as `spec_f2.csv` (this directory).
 

@@ -32,8 +32,11 @@ Editor decision: **major revision**, then round 2.
    weak `arch_ok`) are stated.
 7. The **accuracy formula** is stated exactly and no longer described as a
    strict commit-only ratio.
-8. The **EVES/queue-population assumption** is a named limitation; the plan
-   allocates every load, but paper-level fidelity is not claimed.
+8. The **EVES/queue-population question is resolved by the paper** (Section
+   III-B): every candidate allocates a `SpecGVQ` entry, and the base is selected
+   by distance with no tag. The optional EVES-assisted early population is the
+   only model omission, and it can only make bases available sooner. Quotes:
+   `PAPER_NOTES.md`.
 9. **Prevalence prose** is corrected in `prevalence.md` (per-target base PCs;
    three instructions for controls) and the fault-probe over-approximation is
    stated.
@@ -45,9 +48,9 @@ Editor decision: **major revision**, then round 2.
 
 | id | issue | disposition | where |
 |---|---|---|---|
-| R1-1 | EVES may gate queue allocation | accepted + open | §2 "Queue population", §9.4 |
+| R1-1 | EVES may gate queue allocation | **resolved by paper** (unconditional allocation, distance-only base) | §2, §9.4, `PAPER_NOTES.md` |
 | R1-2 | 1024 window attribution; `fence.i`; squash reuse | fixed/clarified | §2 row, §5 Mode 2, §3 observable |
-| R1-3 | Mode 1 latency race not measured | accepted + open | §9.1; sensitivity run |
+| R1-3 | Mode 1 latency race not measured | **measured** (delay sweep + cycle trace + latency proxy) | §7.3, §9.1, `RESULTS_races.md` |
 | R1-4 | "architectural distance is a lower bound" | fixed | §9.3; A4 branchless, tool counts allocations |
 | R1-5 | commit-based accuracy tautological | **reviewer error**, formula fixed | §6 gives numerator/denominator; `README.md` too |
 | R1-6 | 22.9 % is post-hoc 3-benchmark mean | fixed | §7.1 reports all four, exclusions and numbers |
@@ -71,15 +74,15 @@ Editor decision: **major revision**, then round 2.
 | R2-8 | distance map is build-specific | fixed | §5, §9.10 |
 | R2-9 | "no gadget" means no victim gadget | fixed | §1 (attacker still supplies probe) |
 | R2-10 | victim predictions / `lastMisp` | fixed | §9.11 |
-| R2-11 | SafeSpec/DoM untested | accepted + open | Abstract, §9.13; top open item |
-| R2-12 | fill survival is a gem5 property | fixed | §3 observable |
+| R2-11 | SafeSpec/DoM untested | accepted + **deferred** (out of scope) | Abstract, §9.13 |
+| R2-12 | fill survival is a gem5 property | control added: survives a branch squash too; still gem5 | §3, `RESULTS_races.md` |
 | R2-13 | A4 warms the key line | fixed | §5, §7.3 |
 
 ## R3 — methodology / artifact
 
 | id | issue | disposition | where |
 |---|---|---|---|
-| R3-1 | no single estimator; Mode 2 fabricates 7 bytes | fixed + accepted | §5, §7.3, §9.5/9.7 |
+| R3-1 | no single estimator; Mode 2 fabricates 7 bytes | hardened (vote floor/known/byte 0/arch) but **still not null-clean**; open | §5, §7.3, §9.5/9.7 |
 | R3-2 | Layer 5 estimator weak | accepted | §9.6 |
 | R3-3 | "commit-based accuracy" misnomer | fixed | §6 formula and non-partition caveat |
 | R3-4 | prevalence prose contradicted by CSV | fixed | `prevalence.md` lines 79, 371 |
@@ -106,23 +109,31 @@ Editor decision: **major revision**, then round 2.
 
 ## Open items, ranked
 
-1. **SafeSpec/DoM defence run** (R2-11, R1-3, R3-1). The highest-value missing
-   experiment: does the transient fill survive the defence while the forwarding
-   remains? The repo already has the SafeSpec line.
+1. **SafeSpec/DoM defence run** (R2-11). Explicitly **deferred** by the authors:
+   not part of this revision. The impact claim remains conditional on an
+   undefended hierarchy.
 2. **Variable-data victim** (R1-10, R2-10). Both real victims process constant
    data, so they never self-squash; a MAC over a chosen message would test the
    realistic case.
-3. **Common estimator for Mode 2 and Layer 5** (R3-1/2). Add vote floor, 2×
-   margin and known mask; re-run Layer 4/5 controls and report emissions, not
-   just correctness.
-4. **Mode 1 cycle-margin sensitivity** (R1-3). Configurable +3/+2 delay, trace
-   prediction→probe→squash.
-5. **Differential co-simulation** against `egdiff_sim.py` (R1-9).
-6. **Paper quote for EVES/queue allocation** (R1-1), or a selector-enabled run.
-7. **Positive control for architectural-vs-dispatch divergence** (R1-4, R2-1):
+3. **Null-calibrated estimator for Mode 2** (R3-1). The vote floor, 2× margin,
+   `known` mask, byte-0 inclusion and `reg == SENTINEL` check are in, but the
+   off control still emits 7 wrong bytes and FLOP emits 8 zero bytes. The
+   residual is a deterministic scan/set bias; randomized scan order, per-line
+   baseline and a known-non-secret control are required. Drop Mode 2 from the
+   claims if it cannot be made null-clean.
+4. **Layer 5 estimator** (R3-2). Add a vote floor and 2× margin; re-run and
+   report emissions, not just correctness.
+5. ~~**Mode 1 cycle-margin sensitivity** (R1-3)~~ — done:
+   `RESULTS_races.md` (108–370 cycle margin at 1 division; 230–662 at 12;
+   deferred +2 survives; probe-delay proxy 3/5 survives). The normal-latency
+   event path was withdrawn as unsafe.
+6. **Differential co-simulation** against `egdiff_sim.py` (R1-9).
+7. ~~**Paper quote for EVES/queue allocation** (R1-1)~~ — resolved:
+   Section III-B allocates all candidates; see `PAPER_NOTES.md`.
+8. **Positive control for architectural-vs-dispatch divergence** (R1-4, R2-1):
    a branchy target near the boundary, live-slot replay.
-8. **Second library and full `crypto_verify32` key** (R2-7, R1-7).
-9. **Interior-distance self test** (R3-10).
+9. **Second library and full `crypto_verify32` key** (R2-7, R1-7).
+10. **Interior-distance self test** (R3-10).
 
 ## Reviewer error recorded
 

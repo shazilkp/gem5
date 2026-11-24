@@ -14,6 +14,13 @@ dispositions are in `REVIEW_RESPONSE.md`.
 Mean 5.67/10. Editor's summary: **major revision** before the claims and the
 artifact can be scored as a submission rather than a work-in-progress record.
 
+**Post-review note (paper check).** R1's load-bearing EVES objection is resolved
+by the paper text: Section III-B allocates a speculative-queue entry for *all
+candidates* regardless of prediction validity, and the base is selected by
+distance with no base tag. The optional EVES-assisted population only pushes
+local predictions into the queue earlier. Quotes and section references:
+`PAPER_NOTES.md`; disposition: `REVIEW_RESPONSE.md` R1-1.
+
 ---
 
 ## R1 — Architecture
