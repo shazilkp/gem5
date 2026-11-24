@@ -1216,7 +1216,10 @@ IEW::dispatchInsts(ThreadID tid)
             if (cpu->lvp && cpu->lvp->isEnabled()) {
                 Addr instPC = inst->pcState().instAddr();
 
-                if (cpu->lvp->isEgDiff()) {
+                // Data-prefetch-like loads have no destination and produce no
+                // architectural value; they must not allocate GVQ slots or
+                // shift the NVQ distances.
+                if (cpu->lvp->isEgDiff() && inst->numDestRegs() > 0) {
                     // EgDiff: every candidate load allocates a speculative
                     // GVQ slot; a value is forwarded only when the base load
                     // at the trained distance already has a value.

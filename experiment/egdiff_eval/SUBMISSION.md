@@ -17,7 +17,7 @@ and its base operand is identified only by a *distance*, can one instruction's
 value be forwarded into another instruction's register across a software
 boundary?
 
-We answer yes, with a functionally audited model, 114 automated conformance
+We answer yes, with a functionally audited model, 117 automated conformance
 checks, end-to-end demonstrations on crafted victims and on real Monocypher code
 (`crypto_verify32`, one 8-byte key word) and on the zero-length SipHash-2-4
 path, clean same-binary negative controls, a behavioural ballpark check on SPEC
@@ -156,10 +156,10 @@ the trace/stats rather than "it runs":
 | `run_layer1.sh` | commit-stage polling, stride latch, FPC/u saturation, TICK | 17 |
 | `run_layer2.sh` | speculative queue, verification/squash, lastMisp, ROB rollback | 10 |
 | `run_layer3.sh` | deferred `Wake` wakeup, early-completion ignore, normal path | 13 |
-| `run_layer4.sh` | Mode 1 + Mode 2 end-to-end, controls, ownership split | 14 |
+| `run_layer4.sh` | Mode 1 + Mode 2 end-to-end, controls, ownership split | 17 |
 | `run_layer5.sh` | SipHash-2-4 real target, topology, controls | 24 |
 | `run_layer6.sh` | Monocypher `crypto_verify32` real target, controls | 36 |
-| **total** | | **114** |
+| **total** | | **117** |
 
 The queue-allocation and base-selection rules the attack depends on are quoted
 from the paper in `PAPER_NOTES.md` (Section III-B): every candidate allocates a
@@ -459,12 +459,18 @@ register-level forwarding would remain.
     SafeSpec line; it only alters `isShadowNoAllocate` packets, which the EgDiff
     runs do not generate (shadow cache disabled), so it cannot affect the
     reported numbers, but the tree is not byte-identical to the reviewed commit.
-16. **No co-simulation.** The 114 checks are trace-presence assertions; an
+16. **No co-simulation.** The 117 checks are trace-presence assertions; an
     equivalence run against `egdiff_sim.py` on randomised streams is missing.
 17. **Mitigation not evaluated.** A 64-entry queue with a base tag (or base PC)
     is ~100 bytes of SRAM plus a comparator; tagging it would very likely
     eliminate the attack at modest cost. This is a design recommendation, not a
     measured fix.
+18. **Pipeline-detail scope.** Prefetch/zero-destination loads are now skipped
+    from the GVQ/NVQ, but the model targets the paper's LQ=32 and silently drops
+    allocations beyond 32, so LQ=48/64 configurations are not modelled. Predicted
+    values are not sign/zero-extended for `lb`/`lh`/`lw`, because the access size
+    is unknown at dispatch; the PoCs use `ld`/`lbu` with `diff = 0`, so their
+    results are unaffected, but this is a fidelity gap for narrow signed loads.
 
 ## 10. Conclusion
 
@@ -523,7 +529,7 @@ Third-party pins: Monocypher `f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe`
 
 | claim | evidence | artifact | limitation |
 |---|---|---|---|
-| F1 structural conformance | paper-confirmed allocation/base rule, audited model, 114 checks | layers 1–6; `PAPER_NOTES.md` | trace-presence, no co-sim; optional EVES early population absent; timing not modelled |
+| F1 structural conformance | paper-confirmed allocation/base rule, audited model, 117 checks | layers 1–6; `PAPER_NOTES.md` | trace-presence, no co-sim; optional EVES early population absent; timing not modelled |
 | F2 behavioural ballpark | 22.9 % (3-bench) / 33.3 % (4) coverage, >99 % accuracy | `spec_coverage/` + `spec_f2.csv` | short window, ISA differs, unweighted, exclusions |
 | A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 estimator weak |
 | A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; controls are same-binary |

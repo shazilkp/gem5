@@ -1290,6 +1290,7 @@ LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
     // are updated only when the re-fetched load commits, which is what makes
     // the trained entry survive a misprediction.
     if (inst->isLoad() && inst->fault == NoFault &&
+        inst->numDestRegs() > 0 &&
         cpu->lvp && cpu->lvp->isEnabled() && cpu->lvp->isEgDiff() &&
         !inst->lvpIsVerified()) {
 

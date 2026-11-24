@@ -1026,7 +1026,8 @@ Commit::commitInsts()
                 // makes the NVQ (not the speculative queue) hold the value of
                 // an already-committed load.
                 if (cpu->lvp && cpu->lvp->isEnabled() &&
-                    cpu->lvp->isEgDiff() && head_inst->isLoad()) {
+                    cpu->lvp->isEgDiff() && head_inst->isLoad() &&
+                    head_inst->numDestRegs() > 0) {
                     // The load has committed: any outstanding publish for it
                     // is pointless and must not fire, because its physical
                     // destination may be freed and re-allocated as soon as a

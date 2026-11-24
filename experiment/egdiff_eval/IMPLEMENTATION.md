@@ -22,7 +22,7 @@ Everything below is **single-core, single-thread** (matching the paper and FLOP)
 | **1** | Commit-stage engine: 4K×88-bit table, FPC, TICK decay, 1/16 allocation, NVQ, Algorithm 1 | **DONE — 17/17 checks** | `tests/test-progs/egdiff_attack/run_layer1.sh` |
 | **2** | `SpecGVQ` lifecycle, dispatch prediction, LQ verification + squash, `lastMisp` blackout, ROB rollback | **DONE — 10/10 checks** | `tests/test-progs/egdiff_attack/run_layer2.sh` |
 | **3** | Deferred prediction (`Wake`/`Avail` binding, one-to-one) + asynchronous register wakeup | **DONE — 13/13 checks** (auditor-verified) | `tests/test-progs/egdiff_attack/run_layer3.sh` |
-| **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 14/14 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
+| **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 17/17 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
 | **5** | Real library target (SipHash-2-4, 128-bit key) | **DONE — 24/24 checks** | `tests/test-progs/egdiff_attack/run_layer5.sh` |
 | **6 / A4** | Real Monocypher `crypto_verify32` target in gem5 | **DONE — 36/36 checks** | `tests/test-progs/egdiff_attack/run_layer6.sh` |
 
