@@ -248,7 +248,7 @@ Fix plan (from the review), in order:
   5. Use `fence.i` if the fence-drain property is part of the claim, else scope
      the claim down.
 
-### Layer 5 — PASS (22/22): real SipHash-2-4 target
+### Layer 5 — PASS (24/24): real SipHash-2-4 target
 `tests/test-progs/egdiff_attack/siphash_attack.c`, gated by `run_layer5.sh`.
 
 - Uses the canonical `majek/csiphash` reference `siphash24()` verbatim (only the

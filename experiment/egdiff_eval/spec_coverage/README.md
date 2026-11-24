@@ -1,9 +1,10 @@
 # F2 — Behavioural conformance on SPEC CPU2017
 
 Answers one question: **does the EgDiff model behave like the paper's predictor
-on real programs?** Not "is it fast" — timing is not modelled. This is the
-behavioural half of the fidelity claim (the structural half is the audited
-implementation and the Layer 1–3 gates).
+on real programs?** Not "is it fast" — predictor latency and IPC are not
+modelled. (The attack's cache-probe timing is a separate, modelled property; see
+`SUBMISSION.md`.) This is the behavioural half of the fidelity claim (the
+structural half is the audited implementation and the Layer 1–3 gates).
 
 ## Metric
 
@@ -35,9 +36,13 @@ We should land in the same ballpark, **not** match exactly: different ISA
 
 ## Benchmarks
 
-Five single-command SPEC CPU2017 refrate benchmarks with local inputs:
+The default set is four single-command SPEC CPU2017 refrate benchmarks with
+local inputs:
 
-`505.mcf`, `531.deepsjeng`, `544.nab`, `548.exchange2`, `510.parest`
+`505.mcf`, `544.nab`, `548.exchange2`, `510.parest`
+
+`531.deepsjeng` is selectable (`--benches ...`) but is not in the default set;
+see the exclusion reason below and the pilot number in the result section.
 
 Also available but not in the default set:
 
@@ -72,8 +77,14 @@ Outputs `spec_f2.csv` and a table. Each benchmark runs from its own SPEC
    on this machine).
 3. **ISA/hash/config differ** from the paper, as above.
 4. **Definitions.** Our coverage is the fraction of *committing* loads whose
-   prediction verified. If the paper defines coverage differently, compare the
-   appropriate pair rather than assuming they match.
+   prediction verified. Accuracy is
+   `committedPredicted / (committedPredicted + incorrectAtVerification)`: the
+   numerator is commit-based, the denominator also counts wrong-path loads that
+   verified incorrectly, so the two are not a strict partition. The observed
+   effect is small (the `557.xz` pilot had `incorrect = 0` against 1.58M
+   squashed predicted allocations), but it is not zero in principle. If the
+   paper defines coverage differently, compare the appropriate pair rather than
+   assuming they match.
 5. **Single core**, matching the paper and the rest of this project.
 
 ## What the result is used for
@@ -93,10 +104,18 @@ attack claims.
 | 548.exchange2 | 4,951,309 | 17.52% | 99.49% |
 | 510.parest | 5,161,173 | 22.84% | 99.83% |
 
-Mean over the four: **33.3% coverage, 99.73% accuracy**. Excluding `505.mcf`
-(pointer chasing, the paper's own motivating shape, hence high coverage), the
-other three average **22.9% coverage**, squarely in the paper's reported
-22–26%, with accuracy 99.5–99.8% against the paper's >99%.
+Mean over the four (unweighted over benchmarks, not pooled by load count):
+**33.3% coverage, 99.73% accuracy**. Excluding `505.mcf` (pointer chasing, the
+paper's own motivating shape, hence high coverage), the other three average
+**22.9% coverage** (23.0% from unrounded values), at the lower edge of the
+paper's reported 22–26%, with accuracy 99.5–99.8% against the paper's >99%.
+The fifth attempted benchmark, `531.deepsjeng`, is excluded from both means: a
+30M-instruction pilot measured **95.35% accuracy** while the window was still
+zeroing a 720 MB hash table; including it would move the four-benchmark mean
+accuracy from 99.73% to 98.9%. The exclusion is a workload-shape choice, not a
+filter on the attack.
+
+Raw per-benchmark rows are checked in as `spec_f2.csv` (this directory).
 
 Interpretation: the model behaves like the paper's predictor in the aggregate
 (accuracy high, coverage in the expected band), which is what F2 is for. It is

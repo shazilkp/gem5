@@ -76,10 +76,12 @@ loads, returning straight into the marker.
 calls=10  d=['1']  n_loads_in_call=['8']  n_sensitive_loads=['8']
 base_pc=['106a0'] == d_pc=['106a0']  is_sensitive_pc=['1']  loads_since_ret=['0']
 ```
-The two instructions between the callee `ret` and T2 are the store of the call's
-result and the `jal` into the marker (`loads_since_ret == 0` everywhere: see each
-target's table). `tools/load_pcs.py` also asserts that each marker's load is the
-first load inside its symbol, so nothing can sit between the return and T2.
+For the crypto targets, the two instructions between the callee `ret` and T2 are
+the store of the call's result and the `jal` into the marker; the four control
+targets have three (`insns_since_ret = 3`). In every target `loads_since_ret ==
+0` (see each target's table). `tools/load_pcs.py` also asserts that each
+marker's load is the first load inside its symbol, so nothing can sit between
+the return and T2.
 
 ## Sensitive-PC identification and dynamic validation
 
@@ -368,11 +370,14 @@ n_sensitive_loads,n_loads_in_call,insns_since_ret,loads_since_ret`).
 * `d > 32` for **all** calls (precondition fails): `t_chacha20`, `t_blake2b`, `t_aead`.
 * Input-dependent: none.
 
-Stability: the winning base PC is the same sensitive PC in every call of every
-target, and the per-PC tables above show each sensitive PC's own distance. `d` is a
-single value for `verify32` (7), `memcmp` (1) and `strcmp` (1); it is 1 or 2 for
-`hashlookup`/`listwalk`, depending on which of their two sensitive loads ends the
-exit path; and for `chacha20`/`blake2b`/`aead` it is constant within each of the
+Stability: the winning base PC is **always one of the target's sensitive PCs**,
+and the per-PC tables above show each sensitive PC's own distance. It is a single
+PC in every call for `verify32`, `memcmp` and `strcmp`. For `hashlookup` and
+`listwalk` it alternates between their two sensitive PCs (225/375 and 375/225
+calls), so the summary `d` is a minimum over the two rather than a single stable
+base. `d` is a single value for `verify32` (7), `memcmp` (1) and `strcmp` (1); it
+is 1 or 2 for `hashlookup`/`listwalk`, depending on which of their two sensitive
+loads ends the exit path; and for `chacha20`/`blake2b`/`aead` it is constant within each of the
 `msg` and `key` modes (100% at mode) and a deterministic function of `text_size` in
 `len` mode - message and key *contents* never move it. What varies with the input is
 the *number* of sensitive loads executed - the early-exit position in
@@ -398,6 +403,16 @@ key-buffer load can be within 32 loads of the caller's next load.
   non-secret data: in `t_verify32` the shared `load64_le` helper is used for both
   operands, so 64 sensitive-PC executions occur per call against 32 key accesses. The
   secret is passed second, so the *last* helper calls read the key and `d_key == d`.
+* The `PROT_NONE`/`SIGSEGV` probe marks **every load that touches the tagged page**,
+  which is an over-approximation of "reads the secret". For the synthetic controls
+  this matters: `t_listwalk`'s `d = 1` winner is `ld a0,0(a0)` (the next pointer) and
+  `t_hashlookup`'s `d = 1` entry is the `used` byte. The actual secret load is still
+  within `d <= 3`, so the conclusion is unchanged, but the summary `d` is optimistic
+  for those two targets.
+* `base_pc == d_pc` and `d_key == d` hold in all 6,300 rows. Because the winning PC
+  is selected from the sensitive set, these are consistency checks, not independent
+  evidence that the base is the secret load. The independent evidence is the
+  `objdump` attribution of each sensitive PC and (for A4) the gem5 `base_val` trace.
 * Only architectural, single-threaded, caller-controlled calls are measured. No
   speculation, cache, TLB or interrupt effects are modelled.
 * Loads are classified from `objdump` mnemonics; atomics (`lr.w`/`lr.d`) are excluded

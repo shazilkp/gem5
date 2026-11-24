@@ -1,8 +1,9 @@
-# SUBMISSION — Cross-Instruction Value Forwarding in a Global Load-Value Predictor
+# SUBMISSION (revision 2) — Cross-Instruction Value Forwarding in a Global Load-Value Predictor
 
-*Artifact-style write-up for simulated peer review. Everything below is
-reproducible from this repository; the reviewer packet at the end defines the
-three review roles.*
+*Artifact-style write-up for simulated peer review. Revision 2 incorporates the
+round-1 reviews in `REVIEWS_round1.md`; every change and its disposition is in
+`REVIEW_RESPONSE.md`. Everything below is reproducible from this repository
+except the two third-party inputs named in Appendix A.*
 
 ---
 
@@ -17,16 +18,26 @@ value be forwarded into another instruction's register across a software
 boundary?
 
 We answer yes, with a functionally audited model, 114 automated conformance
-checks, end-to-end demonstrations on crafted victims and on real library code
-(Monocypher `crypto_verify32`, SipHash-2-4), clean same-binary negative controls,
-a behavioural-conformance check on SPEC CPU2017, and a measurement of how often
-the required code shape occurs in real functions. The attack needs **no
-mispredicted branch and no clever gadget in the victim** and **no predictor-table
-collision** — it is a property of the global value queue itself.
+checks, end-to-end demonstrations on crafted victims and on real Monocypher code
+(`crypto_verify32`, one 8-byte key word) and on the zero-length SipHash-2-4
+path, clean same-binary negative controls, a behavioural ballpark check on SPEC
+CPU2017, and a measurement of how often the required code shape occurs in real
+functions. The attack needs **no mispredicted branch and no gadget in the
+victim**, and **no predictor-table collision**. The distinguishing property is
+the **untagged global value queue**: it removes both the table collision
+(needed by Deng & Szefer) and the victim gadget (needed by FLOP). We are not
+aware of a prior attack that forwards a victim's value into an attacker's
+register through such a queue; the comparison is a taxonomy, not a reproduction
+of those attacks.
 
-**Scope statement.** This is a functional, design-level security analysis. It
-makes no performance claim (timing is not modelled), no privilege or
-cross-process claim, and it does not evaluate cache-side-channel defences.
+**Scope statement.** This is a functional, design-level security analysis under
+a source-level non-disclosure convention (a sandbox/JIT-like "the attacker's
+code cannot name the secret", **not** an MMU boundary). It makes no
+predictor-latency or IPC claim; the cache-probe *timing* used to observe the
+leak **is** modelled by gem5. It makes no privilege or cross-process claim. The
+cache exfiltration is demonstrated on an undefended hierarchy: SafeSpec and
+Delay-on-Miss are **not evaluated** and are expected to block the observation
+while leaving the register-level forwarding intact.
 
 ---
 
@@ -41,16 +52,22 @@ predicted(L) = value_of(the load d positions earlier) + learned_offset
 
 with `1 <= d <= 32`. Two claims follow and are tested here:
 
-- **A1 (mechanism).** If an attacker trains their own load to `distance = d,
-  offset = 0`, and a victim's sensitive load lands exactly `d` back in the
+- **A1 (mechanism).** If an attacker trains their own load to `distance = d`,
+  `offset = 0`, and a victim's sensitive load lands exactly `d` back in the
   dynamic load stream, the predictor writes the sensitive value into the
   attacker's destination register.
-- **A3 (opportunity).** Real functions that load a sensitive value near their
-  return satisfy this `d <= 32` precondition; long transform functions do not.
+- **A3 (opportunity).** Some real functions that load a sensitive value near
+  their return satisfy this `d <= 32` precondition; long transform functions do
+  not. A3 is a *precondition* result: where it holds we measured the distance,
+  but the end-to-end attack is demonstrated only for `crypto_verify32` (last key
+  word) and the zero-length SipHash path.
 
-The novel element versus prior predictor attacks is the **absence of a
-per-instruction collision**: the attacker uses its own table entry, and the link
-to the victim is a position in an untagged queue.
+The novel element versus prior predictor attacks is the **untagged global
+queue**: the attacker uses its own table entry, and the link to the victim is a
+position in a queue that carries neither a base tag nor a base PC. This removes
+the per-instruction collision required by Deng & Szefer and the victim-side
+gadget required by FLOP. It does not remove the attacker's own value-to-address
+probe.
 
 ## 2. Background: the EgDiff model
 
@@ -61,14 +78,28 @@ to the victim is a position in an untagged queue.
 | Allocation | tag mismatch replaces only if `u == 0`, with probability 1/16; 10-bit TICK decays `u` |
 | Global value queue | 64 entries = 32 speculative (lock-step with the LQ) + 32 committed (NVQ) |
 | Deferred prediction | base not ready ⇒ store `distance`/`diff`, bind a one-to-one `Wake`; wake on base completion |
-| Verification | predicted vs actual at LQ completion; mismatch ⇒ squash + suppress all predictions for 1024 instructions |
+| Verification | predicted vs actual at LQ completion; mismatch ⇒ squash + suppress all predictions for 1024 instructions (paper §III-A) |
 | Update | commit-stage distance polling (Algorithm 1); table written only at commit |
 
-Deviations from the paper/plan, all deliberate and documented: the PC hashes use
-`pc >> 1` (the illustrative `pc >> 2` aliases two loads in one 4-byte word on
-RISC-V with compressed instructions); `Wake` is stored as a sequence number, not a
-5-bit index; predictor latency (3 cycles normal, +2 deferred) and the
-PRF-write elision are **not modelled**; the EVES hybrid is not implemented.
+**Queue population.** The transcribed algorithm (`plan.md`) allocates a
+`SpecGVQ` entry for **every** dispatched load, whether or not it is predicted;
+the attack depends on that. The EVES hybrid selector is **not implemented**. If
+the paper's selector gates *allocation* (not merely which predictor's output a
+load consumes), a victim load could be excluded from the queue and the attack's
+precondition would need re-evaluation. We therefore do not claim paper-level
+fidelity on this point; it is the largest structural assumption in the result.
+
+**Timing.** Predictor latency (3 cycles normal, +2 deferred) and the PRF-write
+elision are not modelled; this is a performance omission. Cache timing *is*
+modelled, because the observable is a cache-probe hit/miss. Mode 1 additionally
+assumes the forwarded probe reaches the cache before the mispredicting load
+squashes; the address delay (12 register-only divisions) is chosen to make that
+margin large, but the margin is not measured cycle-by-cycle (§9).
+
+Other deviations: the PC hashes use `pc >> 1` (the illustrative `pc >> 2`
+aliases two loads in one 4-byte word on RISC-V with compressed instructions);
+`Wake` is stored as a sequence number, not a 5-bit index; the EVES hybrid is not
+implemented.
 
 ## 3. Threat model
 
@@ -78,15 +109,28 @@ PRF-write elision are **not modelled**; the EVES hybrid is not implemented.
   executes after the call returns.
 - The **victim's value is not architecturally nameable by the attacker's code**.
   The target translation unit owns it as a `static` object; the attacker unit has
-  no symbol reference (checked mechanically). This is a same-process "cannot name
-  it" boundary, comparable to a script that cannot read engine-internal state; it
-  is **not** an MMU-enforced isolation claim.
+  no symbol reference, checked mechanically with `nm`. This is a same-process
+  **non-disclosure convention**, comparable to a sandboxed script that cannot
+  read engine-internal state. It is **not** an MMU-enforced isolation claim and
+  it does **not** stop a native same-process attacker from computing the key
+  address from the target's own code or from `/proc/self/mem`. The experiment
+  instantiates the convention, not the sandbox.
+- The attacker TU does reference `target_verify32_selfcheck` and
+  `oracle_report_verify32`; the former reads the key inside the target TU and the
+  latter is a post-hoc checker. The `nm` check covers only `secret_*`/`v32_key`
+  symbols, so it proves non-naming, not non-reading. The measurement path itself
+  uses only the public `target_verify32` entry point.
 - **Observable channel:** the forwarded value drives a dependent load whose cache
   line survives the subsequent squash. This is a data-flow transient-execution
-  channel, so speculative-cache defences (SafeSpec, Delay-on-Miss) are relevant
-  to the *exfiltration*, though not to the forwarding itself.
-- **Out of scope:** privilege escalation, cross-process leakage, performance,
-  real hardware, timing side channels beyond the cache probe.
+  channel. The *forwarding* is register-level and would survive SafeSpec/DoM; the
+  *observation* is a speculative cache fill and would not. The paper reports the
+  forwarding plus the observation on an undefended hierarchy; the fill surviving
+  the squash is a gem5-modelled property (the value-misprediction squash reuses
+  gem5's `squashDueToMemOrder`, whose MSHR/load handling determines survival),
+  and real cores may differ.
+- **Out of scope:** privilege escalation, cross-process leakage, predictor
+  latency/IPC, real hardware, timing channels beyond the cache probe, and
+  sandbox instantiation.
 
 ## 4. Implementation and conformance
 
@@ -107,6 +151,15 @@ the trace/stats rather than "it runs":
 | `run_layer6.sh` | Monocypher `crypto_verify32` real target, controls | 36 |
 | **total** | | **114** |
 
+These are **trace-presence assertions, not an equivalence proof**. Several Layer-1
+checks match a value anywhere in the trace rather than for the tested load in the
+expected order; there is no differential co-simulation against
+`experiment/egdiff_eval/egdiff_sim.py`; the deferred-binding-cleared-by-squash
+stat is emitted but not asserted; and the 1/16 allocation rate and the exact
+TICK period are checked for "some activity", not statistically. They establish
+that the implemented model does what the plan says in the tested shapes, not
+that it is the paper's model in every detail.
+
 An independent subagent audit of Layer 3 (paper + plan only) found one blocking
 harness defect (hash aliasing made a phase dead code) and one instrumentation
 gap; both were fixed and the gate re-passed. The audit's report is retained.
@@ -118,7 +171,8 @@ victim once; execute the attacker's load immediately after the return with a
 delayed address (register-only division chain). The predictor forwards the
 victim's value; a dependent probe encodes it into the cache; verification
 squashes, the line remains. The estimator uses per-attempt hot/cold calibration,
-alternating architectural sentinels, a `known` mask, and a minimum vote margin.
+alternating architectural sentinels, a `known` mask, a **minimum of 2 votes** and
+a **2× runner-up margin**.
 
 **Mode 2 (commit-time capture).** The victim executes a serialising `fence.i`.
 A capture body with exactly one constant load at `d = 1` makes Algorithm 1 poll
@@ -126,31 +180,74 @@ A capture body with exactly one constant load at `d = 1` makes Algorithm 1 poll
 predicts `−S`. One capture per byte; the architectural value is routed to a probe
 slot outside the measured range.
 
-**Real targets.** SipHash-2-4 (`d = 5, 6`) and Monocypher `crypto_verify32`
-(`d = 7…14`, generalised training). In both, the target TU owns the key and the
-attacker TU never names it.
+Mode 2's fence is a **harness ordering device**, not a security claim: gem5
+models `FENCE.I` as a pipeline drain, but on RISC-V `FENCE.I` orders instruction
+fetch, not data. The claim is that the victim load has committed before the
+replay (guaranteed by the call/return and the harness fence) and the NVQ persists
+by definition. Mode 2's estimator is weaker than Mode 1's: `argmax` over slots
+`1..255` with a 20-cycle lead, **no vote floor and no known mask**, and byte
+`0x00` is excluded. Its `EGDIFF_ON=0` control emits seven bytes
+(`3f3f3f3f3f3f3f00`), all incorrect; the verdict is NO-MATCH, but this is a
+fabrication-risk demonstration, not a clean zero. A vote floor/known mask for
+Mode 2 is future work.
+
+**Real targets.** SipHash-2-4 (`d = 5, 6`) **on the empty-message path only**:
+with a non-empty message the key loads are followed by hundreds of state/message
+loads, so `d > 32`. Monocypher `crypto_verify32` (`d = 7…14`) recovers only
+`key[24..31]` (the last 8-byte word); the preceding word is at ≈15–22, the next
+at ≈23–30, and the first at ≈31–38, so two more words are in-window in principle
+but were not demonstrated. In both, the target TU owns the key and the attacker
+TU never names it. The A4 harness warms the key line with
+`target_verify32_selfcheck()` and two `target_verify32(guess)` calls before the
+measured lane, so the common path is base-available (NVQ), not the deferred
+path; a cold-key variant is the honest deferred test.
+
+**Distance map.** `d` is a property of the compiled binary (compiler, flags,
+library version), not of the source function. The SipHash constants must be
+updated on codegen changes; A4's `d = 7…14` was measured in this build. Runtime
+discovery of `d` (trying all 32 positions) is not demonstrated.
 
 ## 6. Measurement methodology
 
-- **F2 coverage/accuracy are measured at commit**: a prediction counts only if its
-  load commits. Dispatch-time ratios are invalid on branchy code — `557.xz`
-  dispatches 1.78 M predicted loads against 0.20 M committed ones because of ~2 M
-  misprediction squashes.
+- **Coverage** = `egdiffCommittedPredicted / egdiffCommits`: the fraction of
+  committing loads whose prediction verified.
+- **Accuracy** = `egdiffCommittedPredicted / (egdiffCommittedPredicted +
+  numPredictionIncorrect)`. The numerator is commit-based; the denominator also
+  includes wrong-path loads that verified incorrectly. The two are not a strict
+  partition (a wrong-path correct prediction is in neither), so "commit-based
+  accuracy" is a shorthand, not a literal commit-only ratio. The `557.xz` pilot
+  had `incorrect = 0` against 1.58M squashed predicted allocations, so the
+  practical bias is small but unquantified.
+- Dispatch-time ratios are reported as a diagnostic only. They are invalid as
+  coverage on branchy code: `557.xz` dispatches 1.78M predicted loads against
+  0.20M committed ones because of ~2M misprediction squashes.
 - **Prevalence distance**: `n` = dynamic *load* instructions strictly between the
   last execution of a sensitive-load PC and the caller's marker load;
   `d = n + 1`; precondition `d <= 32`. Reported as the minimum over all sensitive
-  PCs, last-execution semantics, with base-PC identity checked.
-- **Validation**: a known-load-count self test; the QEMU guest-PC field checked
-  against `_start`; an independent hand count; marker adjacency (zero loads
-  between the callee `ret` and the marker in all 6,300 calls); and a
-  `PROT_NONE`/`SIGSEGV` probe that validates the sensitive-PC set dynamically.
-- **Dispatch-order check**: the gem5 trace now records every slot allocation and
+  PCs, last-execution semantics. The `PROT_NONE`/`SIGSEGV` probe marks every load
+  touching the tagged page, an over-approximation of "reads the secret"; for the
+  synthetic lookup/walk controls the winning PC can be a next pointer or a `used`
+  flag, so their summary `d` is optimistic (the actual secret load is still
+  `d <= 3`). `base_pc == d_pc` and `d_key == d` in all 6,300 rows, so those are
+  consistency checks, not independent evidence.
+- **Validation**: a known-load-count self test (currently `d = 1` only; an
+  interior-distance case is still needed); the QEMU guest-PC field checked
+  against `_start`; marker adjacency (zero loads between the callee `ret` and the
+  marker in all 6,300 calls); and the `PROT_NONE`/`SIGSEGV` probe that validates
+  the sensitive-PC set dynamically. `measure_d.py`'s "last 8 key loads" heuristic
+  is tied to one disassembly; the offset-set assertion makes a codegen change
+  fail the gate rather than silently shift the map.
+- **Dispatch-order check**: the gem5 trace records every slot allocation and
   each prediction's `base_val`/`base_pc`, so the architectural distance can be
-  compared with the order EgDiff actually indexes.
+  compared with the order EgDiff actually indexes. The tool counts allocation
+  events, not live queue entries, and is valid only in squash-free windows.
+- **Modes**: 300 inputs per mode; `key`/`msg`/`len` replay the same 300-input
+  sequence, so 600/900 calls are not independent samples and the 62.5% figures
+  are mode blends.
 
 ## 7. Results
 
-### 7.1 Behavioural conformance (SPEC CPU2017, 30 M instructions, commit-based)
+### 7.1 Behavioural ballpark (SPEC CPU2017, 30 M instructions, commit-based)
 
 | benchmark | committed loads | coverage | accuracy |
 |---|---|---|---|
@@ -158,93 +255,177 @@ attacker TU never names it.
 | 544.nab | 5,527,140 | 28.38 % | 99.60 % |
 | 548.exchange2 | 4,951,309 | 17.52 % | 99.49 % |
 | 510.parest | 5,161,173 | 22.84 % | 99.83 % |
-| **mean** | | **33.3 %** | **99.73 %** |
+| **mean (unweighted)** | | **33.3 %** | **99.73 %** |
 
 Excluding pointer-chasing `505.mcf`, the remaining three average **22.9 %
-coverage**, inside the paper's reported 22–26 %, with >99 % accuracy. This is a
-ballpark check that the model behaves like the paper's predictor, not a
-reproduction (different ISA, hash, hierarchy, window; no SimPoints).
+coverage** (23.0 % from unrounded values), at the lower edge of the paper's
+reported 22–26 %, with accuracy 99.5–99.8 %. This is a ballpark check, not a
+reproduction (different ISA, hash, hierarchy, window; no SimPoints, no warm-up
+split; unweighted means).
+
+Exclusions, with numbers where measured: `519.lbm` (SE register-only spin; 4k
+loads in 10M instructions), `503.bwaves` (exits after ~138k instructions),
+`557.xz` (~2M misprediction squashes; 8× slower), and `531.deepsjeng` (first 30M
+instructions zero a 720 MB hash table; **95.35 % accuracy** in a 30M pilot).
+Including `531.deepsjeng` would move the four-benchmark mean accuracy from
+99.73 % to 98.9 %. The exclusions are workload-shape choices, made before the
+attack study, but they move both headline numbers toward the paper's band and
+should be read as such.
 
 ### 7.2 Prevalence of the `d <= 32` shape (6,300 calls, 300 per input mode)
 
-| target | shape | d (mode) | stability | d ≤ 32 |
-|---|---|---|---|---|
-| `crypto_verify32` | constant-time compare | 7 | 100 % at 7 | yes |
-| `memcmp` | early-exit compare | 1 | 100 % at 1 | yes |
-| `strcmp` | early-exit compare | 1 | 100 % at 1 | yes |
-| hash lookup | lookup | 2 | 62.5 % at 2 (1–2) | yes |
-| list walk | walk | 2 | 62.5 % at 2 (1–2) | yes |
-| `crypto_chacha20` | block cipher | 519 | 67 % at 519 | no |
-| `blake2b` (keyed) | block hash | 552 | 67 % at 552 | no |
-| `aead_lock` | composite | 1339 | 67 % at 1339 | no |
+| target | kind | shape | d (mode) | stability | d ≤ 32 |
+|---|---|---|---|---|---|
+| `crypto_verify32` | real Monocypher | constant-time compare | 7 | 100 % at 7 | yes |
+| `memcmp` | control implementation | early-exit compare | 1 | 100 % at 1 | yes |
+| `strcmp` | control implementation | early-exit compare | 1 | 100 % at 1 | yes |
+| hash lookup | control implementation | lookup | 2 | 62.5 % at 2 (1–2) | yes |
+| list walk | control implementation | walk | 2 | 62.5 % at 2 (1–2) | yes |
+| `crypto_chacha20` | real Monocypher | block cipher | 519 | 67 % at 519 | no |
+| `blake2b` (keyed) | real Monocypher | block hash | 552 | 67 % at 552 | no |
+| `aead_lock` | real Monocypher | composite | 1339 | 67 % at 1339 | no |
 
-End-loading check/lookup shapes are eligible; block primitives are structurally
-out because they load the key once and then execute hundreds of loads of derived
-state. Variance is classified per target (deterministic, attacker-selectable, or
-secret/external-state dependent).
+The four "control implementation" rows are hand-written targets in
+`prevalence/targets/`, not the system libc; the real-libc `memcmp` probe is used
+only for the dispatch-distance check. End-loading check/lookup shapes satisfy the
+precondition; the hash/list exact distance is bimodal, so "precondition holds"
+is not "attack demonstrated". Block primitives are structurally out: they load
+the key once and then execute hundreds of loads of derived state. Variance is
+classified per target (deterministic, attacker-selectable, or secret/external
+state dependent).
 
 ### 7.3 End-to-end forwarding
 
 | experiment | result | controls |
 |---|---|---|
-| Mode 1 (`SpecGVQ`, crafted victim) | 64-bit value recovered | off/FLOP: 0 |
-| Mode 2 (`NVQ` capture + replay, fenced victim) | 64-bit value recovered | off/FLOP: 0 |
-| SipHash-2-4 | 16/16 key bytes, `d = 5, 6` | off/FLOP: 0/16 |
-| Monocypher `crypto_verify32` | 8/8 bytes of key[24..31], `d = 7…14`, 16 votes/lane | off/FLOP: 0/8 |
+| Mode 1 (`SpecGVQ`, crafted victim) | 64-bit value recovered (5/5 secrets) | off/FLOP: NO-MATCH, 0 |
+| Mode 2 (`NVQ` capture + replay, fenced victim) | 64-bit value recovered | off: NO-MATCH but emits 7 wrong bytes (`3f3f…00`); FLOP: 0 |
+| SipHash-2-4, empty message | 16/16 key bytes, `d = 5, 6` | off/FLOP: 0/16 correct |
+| Monocypher `crypto_verify32` | 8/8 bytes of `key[24..31]`, `d = 7…14`, 16 votes/lane | off/FLOP: 0/8 |
 
 In A4 the gem5 trace shows, for each key byte, 16 predictions whose `base_val` is
-that byte; when the base was in the queue, `base_pc` is the key-load PC
-(`0x10f58 = lbu a5,0(a0)`, `0x10f7e = lbu a0,7(a0)`). A one-call `memcmp` probe
-gives architectural `d = 1` and dispatch `d = 1` for both the equal and
-early-exit cases.
+that byte (18 for `0x10`; the extra two are not filtered by dependent PC); when
+the base was still speculative, `base_pc` is the key-load PC (`0x10f58 = lbu
+a5,0(a0)`, `0x10f7e = lbu a0,7(a0)`), and when it had committed, `base_pc = 0`
+(the NVQ stores values, not PCs). The key line is warmed before the measured
+lane (§5), so most wins are NVQ-sourced. A one-call `memcmp` probe gives
+architectural `d = 1` and dispatch `d = 1` for both the equal and early-exit
+cases; it has no branch between the last compared byte and the return, so it
+does not exercise the wrong-path risk. A4's earliest byte is `d = 14` (margin
+18), not the `d = 7` used for the prevalence margin argument. The A4 run has
+`numPredictionIncorrect = 369`; the SipHash run has 506 (including the 80
+measurement mispredictions). Each leaked byte therefore costs a squash and a
+1024-instruction global blackout: the attack has a loud per-leak signature, and
+the "no timing claim" scope does not cover it.
+
+The controls' `sink` equality in A4 is **not** an architectural checksum: it is a
+harness accumulator that is identical by construction (see `RESULTS_A4.md`). The
+architectural controls are `archpre self=OK repro=OK marker=OK` and the oracle's
+`MATCH`.
 
 ## 8. Related work
 
 | work | predictor | collision needed | victim gadget | observable |
 |---|---|---|---|---|
 | Spectre | branch | — | yes | cache |
-| FLOP (2025) | local LVP (M3) | no | yes | cache |
+| FLOP (2025) | local LVP (M3) | **no** | **yes** | cache |
 | SLAP (2025) | load address predictor | no | yes | cache |
 | Deng & Szefer (2021) | local VP (LVP/VTAGE) | **yes** (index/tag) | yes | cache |
 | ISER (2021) | recomputation | — | yes | cache |
 | **this work** | **global VP (EgDiff)** | **no** | **no** | cache (transient fill) |
 
-SafeSpec / Delay-on-Miss / InvisiSpec hide speculative cache fills; they are
-relevant to the observable channel and are **not yet evaluated here**.
+The novelty is the *global, untagged queue*: it supplies both properties at once.
+Deng & Szefer need the attacker's table entry to collide with the victim's; FLOP
+needs a victim-side gadget that turns the predicted value into an address. Here
+the attacker's own entry is trained and the victim load is selected only by its
+position in the queue; the attacker still supplies the value-to-address probe.
+We have not reproduced either prior attack, so the table is a mechanism
+comparison, not an experimental taxonomy.
+
+SafeSpec / Delay-on-Miss / InvisiSpec hide speculative cache fills. They are
+relevant to the *observation* and are **not yet evaluated here**; the
+register-level forwarding would remain.
 
 ## 9. Limitations and threats to validity
 
-1. **No timing/IPC.** Predictor latency and PRF elision are not modelled; F3 is
-   declared out of scope, so no performance claim is made.
-2. **Same-process model, source-level boundary.** The attacker cannot *name* the
-   value, but this is not MMU-enforced isolation; no privilege/cross-process claim.
-3. **Architectural distance is a lower bound.** Wrong-path loads can only add
-   loads, so `d` is optimistic. In-window prevalence targets have `d <= 7`
-   (≥ 25 loads of margin); out-of-window targets cannot flip. A4 has no branch
-   between the key load and the return; `memcmp` dispatch and architectural `d`
-   agree. Branchier targets near the boundary are not covered.
-4. **Prevalence corpus is small and one library.** Monocypher plus four
-   hand-written controls; no second library.
-5. **One real function per library.** SipHash and `crypto_verify32`; lane offsets
-   in A4 are public code structure, only values come from the oracle.
-6. **Defences untested.** SafeSpec/DoM are expected to block the *cache
-   exfiltration* while leaving the forwarding intact; this must be measured, not
-   assumed.
-7. **SPEC coverage is a 30 M-instruction window without a warm-up split**, and
-   four benchmarks were excluded with recorded reasons (`lbm` SE spin, `bwaves`
-   too short, `xz` squash-heavy, `deepsjeng` hash-table zeroing).
-8. **Measurement is a microbenchmark harness.** It demonstrates the mechanism;
-   it is not an end-to-end exploit against a deployed sandbox.
+1. **No predictor latency/IPC.** The 3-cycle/+2-deferred latency and PRF elision
+   are not modelled. Cache-probe timing *is* modelled. Mode 1's race between the
+   probe and the squash is made large by 12 divisions but is not measured
+   cycle-by-cycle; a +3/+2-delay sensitivity run is the missing experiment.
+2. **Non-disclosure convention, not isolation.** The attacker cannot *name* the
+   value, but a native same-process attacker could read it; no MMU, privilege or
+   cross-process claim. The `nm` check covers only `secret_*`/`v32_key`, not
+   `target_verify32_selfcheck`/`oracle_report_verify32`.
+3. **Distance is not a margin.** The base is selected at an exact dispatch
+   distance; one wrong-path load changes it. Architectural `d` is neither an
+   upper nor a lower bound on dispatch `d` once slots are dropped at squash. A4
+   is branchless and the `memcmp` probe has no branch in the window, so the
+   measured agreement is not a positive control for divergence. For prevalence,
+   in-window targets have `d <= 7` (25-load margin) and out-of-window targets
+   have `d >= 519`; the large gap makes a flip implausible, but the argument is
+   empirical, not a proof. `measure_dispatch_d.py` counts allocations, not live
+   slots.
+4. **EVES / queue population.** The plan allocates every load; the paper's
+   selector may gate allocation. Unresolved; the attack targets the transcribed
+   model.
+5. **Mode 2 estimator is weak.** No vote floor, no known mask, byte 0 excluded,
+   `arch_ok` checks `atk_buf[0]` rather than the replayed load's return. Its off
+   control emits seven fabricated bytes. The recovered value is still correct in
+   the on run, but the control narrative is weaker than Mode 1/A4.
+6. **Layer 5 estimator is weak.** `REPS = 5`, fixed 20-cycle margin, bare
+   majority, no vote floor. It produced 0/16 in both controls, but one lucky
+   attempt could decide a byte.
+7. **No single estimator across harnesses.** Mode 1/A4 use calibrated,
+   vote-floor, 2×-margin, known-mask rules; Mode 2 and Layer 5 do not. §5's
+   description is per-harness, not one design.
+8. **Prevalence corpus is small and partly synthetic.** One real library, four
+   hand-written controls, one function per library. The fault probe
+   over-approximates; min-over-PCs is optimistic for lookup/walk; the three modes
+   replay 300 inputs and are not independent samples.
+9. **Narrow real targets.** A4 demonstrates one key word, with a warmed key line;
+   SipHash is empty-message only, also warmed. `memcmp`/`strcmp`/hash/list are
+   precondition measurements, not attacks. `crypto_verify32`'s full 32-byte key
+   is not recovered.
+10. **Build sensitivity.** `d` depends on compiler, flags and library version.
+    A3 is a property of these binaries, not of the source functions.
+11. **Victim and attacker prediction behaviour is assumed.** The victim's
+    sensitive loads are assumed predictable/pre-trained; a victim misprediction
+    would squash the window. The attacker pays one squash and a 1024-instruction
+    blackout per byte (369 incorrect in A4, 506 in SipHash).
+12. **Constant-data victims.** Both real targets process a constant key, an
+    all-zero guess and an empty message, so the victim's own loads never lock and
+    never self-squash. A variable-data victim (MAC over a chosen message) is the
+    obvious missing experiment.
+13. **Defences untested.** SafeSpec/DoM are expected to block the cache
+    observation while leaving the forwarding intact; this must be measured, not
+    assumed. It is the highest-value missing experiment.
+14. **SPEC is a 30M window without warm-up**, unweighted, with four excluded
+    benchmarks (one at 95.35 % accuracy). Accuracy is not a strict commit-only
+    ratio (§6). It is a ballpark check, not a conformance proof.
+15. **Reproducibility.** Monocypher is pinned (`third_party/README.md`) but not
+    vendored; SPEC binaries are external, but `spec_f2.csv` is checked in. The
+    working tree has an uncommitted `src/mem/cache/base.cc` hunk from the
+    SafeSpec line; it only alters `isShadowNoAllocate` packets, which the EgDiff
+    runs do not generate (shadow cache disabled), so it cannot affect the
+    reported numbers, but the tree is not byte-identical to the reviewed commit.
+16. **No co-simulation.** The 114 checks are trace-presence assertions; an
+    equivalence run against `egdiff_sim.py` on randomised streams is missing.
+17. **Mitigation not evaluated.** A 64-entry queue with a base tag (or base PC)
+    is ~100 bytes of SRAM plus a comparator; tagging it would very likely
+    eliminate the attack at modest cost. This is a design recommendation, not a
+    measured fix.
 
 ## 10. Conclusion
 
 EgDiff's untagged global value queue forwards one instruction's value to another
 with no per-instruction collision and without requiring a gadget in the victim.
-The design is demonstrated on crafted victims and on two real library routines,
-the required code shape is measured on real functions, and the model's behaviour
-is checked against SPEC. The result is a design-level vulnerability in a
-*proposed* predictor, with the observable confined to a transient cache channel
-that existing speculative-cache defences may already address.
+The design is demonstrated on crafted victims and on two narrow real paths (one
+`crypto_verify32` key word and zero-length SipHash), the required code shape is
+measured on real functions, and the model's behaviour is checked against SPEC.
+The result is a design-level vulnerability in a *proposed* predictor, under a
+source-level non-disclosure convention; the observable is a transient cache
+channel that existing speculative-cache defences may already address, and the
+defence experiment is the main open item.
 
 ---
 
@@ -260,13 +441,18 @@ tests/test-progs/egdiff_attack/run_layer4.sh    # 14
 tests/test-progs/egdiff_attack/run_layer5.sh    # 24
 tests/test-progs/egdiff_attack/run_layer6.sh    # 36
 
-# behavioural conformance (SPEC)
+# behavioural ballpark (SPEC)
 python3 experiment/egdiff_eval/spec_coverage/run_spec.py --maxinsts 30000000
+# raw rows: experiment/egdiff_eval/spec_coverage/spec_f2.csv
 
 # prevalence (host measurement, no gem5)
-cd experiment/egdiff_eval/prevalence && ./tools/run_prevalence.sh
+cd experiment/egdiff_eval/prevalence
+# fetch the pinned Monocypher once:
+#   git clone https://github.com/LoupVaillant/Monocypher.git third_party/Monocypher
+#   git -C third_party/Monocypher checkout f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe
+./tools/run_prevalence.sh
 
-# dispatch-vs-architectural check
+# dispatch-vs-architectural check (build the probe first; see RESULTS_dispatch_trace.md)
 python3 tests/test-progs/egdiff_attack/measure_dispatch_d.py \
   /tmp/opencode/memcmp_probe --sensitive 0x1fdb4 \
   --qemu-log /tmp/opencode/q_equal.log --gem5-log /tmp/opencode/g5_equal/simout
@@ -276,79 +462,50 @@ Key files: `src/cpu/lvp/egdiff_predictor.*`, `configs/example/egdiff.py`,
 `tests/test-progs/egdiff_attack/*` (PoCs, gates, `measure_d.py`,
 `measure_dispatch_d.py`, `memcmp_probe.c`), `experiment/egdiff_eval/`
 (`plan.md`, `IMPLEMENTATION.md`, `RESULTS_*.md`, `prevalence/`,
-`spec_coverage/`).
+`spec_coverage/`, `REVIEWS_round1.md`, `REVIEW_RESPONSE.md`).
+
+Third-party pins: Monocypher `f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe`
+(`prevalence/third_party/README.md`); SPEC CPU2017 RISC-V binaries are external.
 
 ## Appendix B — Claim-to-evidence map
 
 | claim | evidence | artifact | limitation |
 |---|---|---|---|
-| F1 structural conformance | audited model, 114 checks | layers 1–6 | timing not modelled |
-| F2 behavioural conformance | 22.9 % coverage, >99 % accuracy | `spec_coverage/` | short window, ISA differs |
-| A1 mechanism | Mode 1/2, SipHash, verify32 | layers 4–6 | same-process model |
-| A2 specificity | off/FLOP controls | layers 4–6 | ablation optional |
-| A3 opportunity | `d` table + margin | `prevalence/` | architectural lower bound |
-| A4 real-target forwarding | 8/8 key word at `d = 7…14` | `run_layer6.sh` | one function |
+| F1 structural conformance | audited model, 114 checks | layers 1–6 | trace-presence, no co-sim; EVES absent; timing not modelled |
+| F2 behavioural ballpark | 22.9 % (3-bench) / 33.3 % (4) coverage, >99 % accuracy | `spec_coverage/` + `spec_f2.csv` | short window, ISA differs, unweighted, exclusions |
+| A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 estimator weak |
+| A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; controls are same-binary |
+| A3 opportunity | `d` table + margin | `prevalence/` | precondition only; controls synthetic; build-specific |
+| A4 real-target forwarding | 8/8 bytes of `key[24..31]` at `d = 7…14` | `run_layer6.sh` | one word; warmed key; branchless |
 | F3 performance | — | — | **out of scope** |
 
----
+## Appendix C — Round-1 review outcome
 
-## Reviewer packet — simulate three reviewers
+| reviewer | lens | score | recommendation |
+|---|---|---|---|
+| R1 | architecture | 6/10 | weak accept |
+| R2 | security | 5/10 | borderline |
+| R3 | methodology/artifact | 6/10 | borderline |
 
-Each reviewer should read this document plus, as needed, `IMPLEMENTATION.md`,
-`RESULTS_*.md`, and the gate scripts. Each returns: summary, strengths,
-weaknesses, detailed comments, and a recommendation (accept / weak accept /
-borderline / weak reject / reject) with a one-line justification.
+Consensus: the mechanism (A1) and the real-target demonstrations are credible and
+well controlled; the model is a reduced EgDiff (EVES absent), the threat model is
+a non-disclosure convention rather than a sandbox, F2 is a ballpark rather than
+conformance, A3 is a precondition result, the Mode 2/Layer 5 estimators are weaker
+than Mode 1/A4, and the defence experiment is missing. Revision 2 fixes the
+in-text overclaims; the open items are the defence run, a variable-data victim,
+and a common estimator. Full reviews: `REVIEWS_round1.md`; dispositions:
+`REVIEW_RESPONSE.md`.
 
-### R1 — Architecture reviewer
+## Reviewer packet (round 2)
 
-Focus: is the predictor model faithful, and does the security claim survive the
-things the model does *not* include?
+Same three lenses, focused on the revised claims:
 
-Questions to answer:
-1. Are the table/queue/Algorithm-1 structures and parameters right, and is the
-   conformance gate set adequate to establish that?
-2. Does the absence of timing modelling (3-cycle, +2 deferred, PRF elision)
-   undermine the security claim, or only the performance claim?
-3. Is the "commit-based coverage" definition defensible, and is the comparison
-   to the paper's 22–26 % honest?
-4. Is the architectural-vs-dispatch argument (lower bound + margin + one measured
-   comparison) sufficient, or is more needed?
-
-### R2 — Security reviewer
-
-Focus: is there a real vulnerability, is it EgDiff-specific, and what is the
-realistic impact?
-
-Questions to answer:
-1. Is the threat model coherent (same-process "cannot name it" boundary)? Is the
-   distinction from FLOP (no victim gadget) and Deng & Szefer (no table
-   collision) correct and demonstrated?
-2. Is the observable channel (transient cache fill) correctly characterised, and
-   does the paper overstate impact by not testing SafeSpec/DoM?
-3. Are the negative controls sufficient to exclude a measurement artefact?
-4. Would a real attacker be able to satisfy the `d <= 32`, stable-distance
-   precondition in the claimed target class?
-
-### R3 — Methodology / artifact reviewer
-
-Focus: are the numbers measured correctly and can they be reproduced?
-
-Questions to answer:
-1. Are the metric definitions and denominators right (loads only, `d = n+1`,
-   commit-based coverage)?
-2. Is the prevalence measurement sound (parser validation, sensitive-PC
-   identification, last-execution, min over PCs, marker adjacency)?
-3. Are the controls same-binary and meaningful, and is the estimator free of
-   fabrication (`known` mask, vote margins)?
-4. Is the artifact reproducible from the commands and files listed, and are the
-   limitations stated honestly?
-
-### Rebuttal cues (available evidence, not arguments)
-
-- F1: `run_layer1..3.sh`; the Layer-3 audit report.
-- F2: `spec_coverage/README.md` and CSV; the `xz` dispatch/commit divergence.
-- A1: `run_layer4..6.sh`; ownership checks (`nm`) and per-PC trace attribution.
-- A3: `prevalence/results/prevalence.md`, including the validation section.
-- A4: `RESULTS_A4.md`; `RESULTS_dispatch_trace.md` for base identity and the
-  architectural-vs-dispatch comparison.
-- Open: defence test (SafeSpec/DoM), second library, ablation of order/deferred.
+- **R1 (architecture):** does revision 2 correctly scope F1/F2? Is the EVES
+  caveat sufficient, or does the model need the selector before the security
+  claim stands? Is the Mode 1 race now honestly an assumption?
+- **R2 (security):** is the narrowed threat model (non-disclosure convention,
+  conditional exfiltration) coherent? Is the FLOP/D&S comparison now correctly
+  stated as a taxonomy? What is the minimum defence experiment for impact?
+- **R3 (methodology):** are the corrected accuracy formula, prevalence caveats,
+  estimator non-uniformity and reproducibility pins sufficient? Is the Mode 2
+  control now reported honestly?

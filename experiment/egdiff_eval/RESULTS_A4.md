@@ -150,11 +150,11 @@ The recovered word `a1108f2ebd4cdb6a` is key bytes 24..31
 Controls:
 
 - `EGDIFF_ON=0`: 0/8, `known=00`, every `egdiff*` statistic exactly zero,
-  identical architectural checksum.
+  identical `sink` accumulator (not a checksum; see the note below).
 - `EGDIFF_TYPE=flop`: 0/8, `known=00`, every `egdiff*` statistic zero,
   `numPredictions > 0` (the FLOP local predictor is active but its
   pseudo-random training-value sequence never locks, so no byte is forwarded),
-  identical checksum.
+  identical `sink` accumulator.
 - Architectural precondition: `archpre self=OK repro=OK marker=OK` — the
   target is self-consistent, `target_verify32(guess)` is deterministic for a
   fixed guess, and every attempt's re-executed marker returned the sentinel.
@@ -175,8 +175,14 @@ The incorrect predictions are the measured marker loads (predicted key byte vs.
 architectural sentinel), which is the expected squash path; the harness retrains
 after each such squash, and each lane still received 16/16 informative votes.
 
-Architectural checksum `sink=14903399325723612160` is identical in all three
-runs, so the forwarding changes no architectural state.
+`sink=14903399325723612160` is identical in all three runs. It is a **harness
+accumulator**, not an architectural checksum of the victim: it sums training
+values, a probe read that is `0` on the architectural sentinel path, and the
+marker's architectural return. It is therefore identical by construction and
+only detects gross divergence in the training loop. The real architectural
+controls are `archpre self=OK repro=OK marker=OK` (the re-executed marker
+returns the sentinel, so the measurement path did not disappear) and the
+oracle's `MATCH` on the recovered value.
 
 ---
 

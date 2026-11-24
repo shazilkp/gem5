@@ -5,9 +5,11 @@ F2 — behavioural conformance of the EgDiff model on SPEC CPU2017.
 Runs a subset of the RISC-V SPEC CPU2017 refrate binaries under gem5 with the
 EgDiff predictor and reports, per benchmark:
 
-    coverage          = (normal + deferred predictions) / dispatched loads
-    correct-coverage  = correct predictions / dispatched loads
-    accuracy          = correct / (correct + incorrect)
+    coverage          = committedPredicted / committed loads
+    accuracy          = committedPredicted / (committedPredicted + incorrect)
+
+Dispatch-time ratios (predicted / dispatched loads) are emitted as a diagnostic
+only; on branchy code they are inflated by wrong-path loads that are squashed.
 
 The paper reports > 99% accuracy and roughly 22-26% coverage; this script is a
 ballpark check that the model behaves like the paper's predictor, not a
