@@ -32,6 +32,10 @@ BIN="$D/siphash_attack"
 
 [ -x "$GEM5" ] || { echo "missing gem5: $GEM5"; exit 1; }
 
+# The attacker-object ownership check below writes into $WORK before the
+# per-case output directories are created.
+mkdir -p "$WORK"
+
 pass=0; fail=0
 ok()  { echo "  PASS  $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
