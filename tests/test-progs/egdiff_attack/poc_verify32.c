@@ -64,6 +64,15 @@ extern int oracle_report_verify32(uint64_t recovered, uint64_t known_mask,
 
 #define SENTINEL  0xA5A5A5A5A5A5A5A5ULL
 
+/* R5/R6 experiment switches.  COLD_KEY skips the selfcheck/two warm-up
+ * target calls; VARY_GUESS changes the attacker's guess on every attempt. */
+#ifndef COLD_KEY
+#define COLD_KEY 0
+#endif
+#ifndef VARY_GUESS
+#define VARY_GUESS 0
+#endif
+
 static uint8_t probe[PROBE_SZ] __attribute__((aligned(LINE)));
 static volatile uint64_t atk_buf[64] __attribute__((aligned(LINE)));
 static volatile uint64_t carry_buf[8];
@@ -208,7 +217,9 @@ static void
 fill_guess(int variant)
 {
     for (int i = 0; i < 32; i++)
-        guess_buf[i] = (uint8_t)(variant ? (0x5a + i * 7) : 0x00);
+        guess_buf[i] = (uint8_t)(variant
+                                 ? (0x5a + i * 7 + variant * 13)
+                                 : 0x00);
 }
 
 /* Recover one byte forwarded from dynamic distance `dist`.
@@ -223,6 +234,10 @@ measure_lane(int dist, int *votes_out, int *arch_ok_out)
         score[k] = 0;
 
     for (int attempt = 0; attempt < REPS; attempt++) {
+#if VARY_GUESS
+        /* R6: a realistic caller presents different guesses. */
+        fill_guess(attempt + 1);
+#endif
         /* 1. Train the marker's entry at the measured distance, then freeze
          * the architectural value to a sentinel (a store never trains it). */
         train_at(dist, &g_sink);
@@ -362,11 +377,17 @@ main(int argc, char **argv)
     fill_guess(0);
 
     /* Architectural precondition (experimenter side, before the measurement):
-     * the target is self-consistent and deterministic for a fixed guess. */
+     * the target is self-consistent and deterministic for a fixed guess.
+     * COLD_KEY skips the two warm-up calls and the key-reading selfcheck. */
+#if COLD_KEY
+    int self_ok = 1;
+    int repro = 1;
+#else
     int self_ok = (target_verify32_selfcheck() == 0);
     int r1 = target_verify32(guess_buf);
     int r2 = target_verify32(guess_buf);
     int repro = (r1 == r2);
+#endif
 
     uint64_t recovered = 0, known = 0;
     int arch_all = 1;

@@ -182,7 +182,8 @@ gap; both were fixed and the gate re-passed. The audit's report is retained.
 
 ## 5. Attack
 
-**Mode 1 (in-flight).** Train the attacker's load to `d`, `diff = 0`; call the
+**Mode 1 (in-flight or near-commit GVQ).** Train the attacker's load to `d`,
+`diff = 0`; call the
 victim once; execute the attacker's load immediately after the return with a
 delayed address (register-only division chain). The predictor forwards the
 victim's value; a dependent probe encodes it into the cache; verification

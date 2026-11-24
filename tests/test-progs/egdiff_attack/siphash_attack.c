@@ -66,6 +66,9 @@ extern int oracle_report_key(uint64_t rk0, uint64_t rk1, int bytes,
 #ifndef TRAIN
 #define TRAIN     320                 /* training-loop iterations          */
 #endif
+#ifndef COLD_KEY
+#define COLD_KEY  0                   /* 1: skip the warm-up victim call   */
+#endif
 #define FLUSH_SZ  (64 * 1024)
 
 /* Distances measured with objdump (see RESULTS_step2.md):
@@ -264,7 +267,9 @@ measure_byte(int dist, int b, int *votes_out, int *arch_ok_out)
          * immediately instead of racing a deferred wake. */
         flush_l1();
         train(dist);
+#if !COLD_KEY
         g_sink += victim_tag() & 1;
+#endif
 
         /* Single SipHash call with an empty message: k0 and k1 are the last
          * key loads and there is no message load. */
