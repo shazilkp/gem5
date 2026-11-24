@@ -226,6 +226,13 @@ class DynInst : public ExecContext, public RefCounted
     RegVal _lvpPredictedVal = 0;
     /** Whether the LVP made a prediction for this instruction. */
     bool _lvpPredicted = false;
+    /**
+     * A prediction has been computed but its value is not yet visible (the
+     * normal/deferred latency has not elapsed).  While this is set the value
+     * must not be treated as ready: the IQ must not mark the destination
+     * ready and the scoreboard/PRF must not be touched.
+     */
+    bool _lvpPredictionPending = false;
     /** Whether the LVP prediction has been verified. */
     bool _lvpVerified = false;
 
@@ -1225,10 +1232,26 @@ class DynInst : public ExecContext, public RefCounted
         _lvpClassification = cls;
         _lvpPredictedVal = val;
         _lvpPredicted = true;
+        // Publishing makes the value visible, so it is no longer pending.
+        _lvpPredictionPending = false;
     }
 
     /** Whether the LVP predicted a value for this load. */
     bool lvpPredicted() const { return _lvpPredicted; }
+
+    /**
+     * Mark a computed prediction as not yet visible (latency still running).
+     * The IQ uses this to keep the destination not-ready at dispatch.
+     */
+    void setLVPPredictionPending() { _lvpPredictionPending = true; }
+    void clearLVPPredictionPending() { _lvpPredictionPending = false; }
+    bool lvpPredictionPending() const { return _lvpPredictionPending; }
+
+    /** A prediction value is visible to consumers right now. */
+    bool lvpPredictionAvailable() const
+    {
+        return _lvpPredicted && !_lvpPredictionPending;
+    }
 
     /** Get the LVP classification. */
     lvp::LVPClassification lvpClassification() const

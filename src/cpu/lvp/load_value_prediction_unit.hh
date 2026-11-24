@@ -141,6 +141,13 @@ class LoadValuePredictionUnit : public SimObject
     bool completeLoad(uint64_t seqNum, RegVal actualVal,
                       void *&wakeInst, EgDiffPredictResult &wakeResult);
 
+    /**
+     * Make a deferred prediction visible at the publish stage.  Must be
+     * called immediately before the destination register is written, so
+     * that verification never observes a prediction that was not delivered.
+     */
+    void publishDeferred(uint64_t seqNum);
+
     /** Drop speculative state younger than a squash bound (ROB squash). */
     void squashFrom(uint64_t squashNum);
 

@@ -152,7 +152,11 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
         if (curIdx >= d) {
             // Base load still in flight in the speculative queue.
             const EgDiffSpecEntry &base = specGVQ[curIdx - d];
-            if (base.avail || base.vp) {
+            // `pending` means the base has completed and its value is known,
+            // but its deferred publication is still in flight.  The value is
+            // valid to use as a base (and matches the behaviour before the
+            // deferred publish was split into a separate stage).
+            if (base.avail || base.vp || base.pending) {
                 haveBase = true;
                 baseVal = base.value;
                 res.baseVal = base.value;
@@ -219,6 +223,11 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
             q.avail = true;
         }
     } else {
+        // No *published* prediction.  A deferred prediction may still be
+        // pending; it was never delivered to this load, so record the actual
+        // value without verifying (and drop the pending marker so a late
+        // publish cannot resurrect it).
+        q.pending = false;
         q.value = actualVal;
         q.avail = true;
     }
@@ -239,7 +248,8 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
             EgDiffSpecEntry &dep = *dit;
 
             const bool stillValid =
-                !dep.avail && !dep.vp && (depIdx - curIdx) == dep.distance;
+                !dep.avail && !dep.vp && !dep.pending &&
+                (depIdx - curIdx) == dep.distance;
 
             if (!stillValid) {
                 // Section III-C: dependent completed before the base (or its
@@ -248,8 +258,11 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
                 res.wakeIgnoredSeq = dep.seqNum;
             } else if (res.ok && !predictionSuppressed(dep.seqNum)) {
                 const uint64_t predVal = actualVal + dep.diff;
+                // The value exists but is not visible yet.  `vp` is set by
+                // publishDeferred() when the microarchitecture actually
+                // writes it into the destination register.
                 dep.value = predVal;
-                dep.vp = true;
+                dep.pending = true;
                 res.wakeTarget = &dep;
                 res.wake.valid = true;
                 res.wake.value = predVal;
@@ -263,6 +276,25 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
     }
 
     return res;
+}
+
+void
+EgDiffPredictor::publishDeferred(uint64_t seqNum)
+{
+    auto it = std::find_if(specGVQ.begin(), specGVQ.end(),
+                           [seqNum](const EgDiffSpecEntry &x) {
+                               return x.seqNum == seqNum;
+                           });
+    if (it == specGVQ.end())
+        return;
+
+    // Only a prediction that (a) still exists, (b) has not already completed,
+    // and (c) is still pending may become visible.  If the load completed
+    // first it already recorded its actual value and must not be overwritten.
+    if (it->pending && !it->avail && !it->vp) {
+        it->pending = false;
+        it->vp = true;
+    }
 }
 
 unsigned

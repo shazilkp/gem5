@@ -25,18 +25,14 @@ LoadValuePredictionUnit::LoadValuePredictionUnit(const Params &p)
       egdiffDeferredLatency(p.egdiffDeferredLatency),
       stats(this)
 {
-    if (predictorType == "egdiff" && egdiffLatency != 0) {
-        fatal("egdiffLatency=%u is not supported: the delayed normal-publish "
-              "event path corrupts physical-register lifetime.  Use the PoC "
-              "probe-issue delay proxy for normal latency, or "
-              "egdiffDeferredLatency for the deferred +2 path.",
-              egdiffLatency);
-    }
-
     if (predictorType == "egdiff") {
         egdiffPredictor = std::make_unique<EgDiffPredictor>(
             p.egdiffTableEntries, p.egdiffSeed,
             p.egdiffColdDeterministicAlloc);
+        if (egdiffLatency > 16) {
+            fatal("egdiffLatency=%u exceeds the supported modelling range "
+                  "(0..16 cycles)", egdiffLatency);
+        }
         DPRINTF(EgDiff, "EgDiff predictor created: %u table entries, "
                 "order n=%u, seed=%u, coldDeterministicAlloc=%d\n",
                 p.egdiffTableEntries, EgDiffPredictor::ORDER_N,
@@ -388,6 +384,17 @@ LoadValuePredictionUnit::completeLoad(uint64_t seqNum, RegVal actualVal,
     }
 
     return r.ok;
+}
+
+void
+LoadValuePredictionUnit::publishDeferred(uint64_t seqNum)
+{
+    if (!egdiffPredictor)
+        return;
+
+    DPRINTF(EgDiff, "[tick:%llu] [sn:%llu] deferred prediction published\n",
+            curTick(), seqNum);
+    egdiffPredictor->publishDeferred(seqNum);
 }
 
 void

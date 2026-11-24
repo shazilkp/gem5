@@ -1550,8 +1550,12 @@ InstructionQueue::addToProducers(const DynInstPtr &new_inst)
 
         // Mark the scoreboard to say it's not yet ready.
         // LVP: If this is a speculatively predicted load, the value
-        // is already available, so we mark it as ready.
-        if (new_inst->lvpPredicted()) {
+        // is already available, so we mark it as ready.  A prediction
+        // whose latency has not yet elapsed (pending) is *not* available:
+        // the destination must stay not-ready until the publish stage
+        // writes the PRF and wakes dependents, otherwise consumers would
+        // read stale physical-register data.
+        if (new_inst->lvpPredictionAvailable()) {
             regScoreboard[dest_reg->flatIndex()] = true;
         } else {
             regScoreboard[dest_reg->flatIndex()] = false;

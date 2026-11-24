@@ -43,8 +43,10 @@
 
 #include <queue>
 #include <set>
+#include <unordered_map>
 
 #include "base/statistics.hh"
+#include "cpu/inst_seq.hh"
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/inst_queue.hh"
@@ -257,11 +259,23 @@ class IEW
 
     /** Publish a delayed EgDiff prediction: write the PRF and wake dependents. */
     void lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid,
-                    bool wake);
+                    bool wake, bool deferred = false);
 
     /** Schedule lvpPublish after `latency` cycles (0 publishes immediately). */
     void lvpSchedule(const DynInstPtr &inst, RegVal value, ThreadID tid,
-                     unsigned latency, bool wake);
+                     unsigned latency, bool wake, bool deferred = false);
+
+    /**
+     * Cancel pending prediction publishes for every instruction up to and
+     * including `seqNum`.  Called from commit (for retired instructions) and
+     * from squash, so a delayed publish can never touch a physical register
+     * that has been freed or re-allocated.
+     */
+    void lvpCancelPendingUpTo(InstSeqNum seqNum);
+
+    /** Cancel pending publishes for instructions younger than `seqNum`
+     *  (the last committed instruction) after a squash. */
+    void lvpCancelPendingFrom(InstSeqNum seqNum);
 
   private:
     /** Sends commit proper information for a squash due to a branch
@@ -435,6 +449,28 @@ class IEW
 
     /** Maximum size of the skid buffer. */
     unsigned skidBufferMax;
+
+    /**
+     * A prediction whose latency has not yet elapsed.  Instead of a
+     * per-instruction SimEvent (whose lifetime is hard to bound relative to
+     * physical-register recycling), IEW keeps a tiny map from sequence number
+     * to the outstanding publish and services it from tick().  Commit and
+     * squash remove entries explicitly, so a publish can only ever fire for
+     * an instruction that is still in flight and owns its destination.
+     */
+    struct LVPPendingPublish
+    {
+        DynInstPtr inst;
+        RegVal value = 0;
+        ThreadID tid = 0;
+        bool wake = false;
+        bool deferred = false;
+        Tick readyTick = 0;
+    };
+    std::unordered_map<InstSeqNum, LVPPendingPublish> lvpPending;
+
+    /** Publish every prediction whose latency has elapsed. */
+    void lvpServicePending();
 
 
     struct IEWStats : public statistics::Group

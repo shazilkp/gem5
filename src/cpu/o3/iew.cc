@@ -449,6 +449,11 @@ IEW::squash(ThreadID tid)
     ldstQueue.squash(fromCommit->commitInfo[tid].doneSeqNum, tid);
     updatedQueues = true;
 
+    // Drop any prediction publish that belongs to a squashed instruction.
+    // `doneSeqNum` is the last committed instruction, so everything younger
+    // is leaving the pipeline.
+    lvpCancelPendingFrom(fromCommit->commitInfo[tid].doneSeqNum);
+
     // Clear the skid buffer in case it has any data in it.
     DPRINTF(IEW,
             "Removing skidbuffer instructions until "
@@ -497,15 +502,29 @@ IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid)
 }
 
 void
-IEW::lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid, bool wake)
+IEW::lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid, bool wake,
+                bool deferred)
 {
     // A delayed publish must not touch an instruction that has left the ROB:
-    // its physical destination may already have been recycled.  This check is
-    // only valid for the delayed path; the immediate (latency 0) path runs at
-    // dispatch, before the instruction's ROB entry is necessarily visible.
+    // its physical destination may already have been recycled.  It must also
+    // not overwrite an actual value that the load has already written back:
+    // gem5 does not call setCompleted() for loads (only stores and the
+    // commit-time fault path), so use the EgDiff verification flag, which is
+    // set in the LSQ exactly when the load's real value has been captured.
+    // The immediate (latency 0) path runs at dispatch and bypasses this.
     if (!inst || !inst->isInROB() || inst->isSquashed() ||
-        inst->isCompleted() || inst->isCommitted())
+        inst->isCompleted() || inst->isCommitted() ||
+        inst->lvpIsVerified()) {
+        if (inst && inst->lvpPredictionPending())
+            inst->clearLVPPredictionPending();
         return;
+    }
+
+    // A deferred prediction becomes valid exactly when it becomes visible.
+    // Doing this here (rather than when the base completed) guarantees that
+    // verification can never observe a prediction that was never delivered.
+    if (deferred && cpu->lvp)
+        cpu->lvp->publishDeferred(inst->seqNum);
 
     if (inst->numDestRegs() > 0) {
         PhysRegIdPtr destReg = inst->renamedDestIdx(0);
@@ -518,8 +537,9 @@ IEW::lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid, bool wake)
 
     inst->setLVPPrediction(lvp::LVPClassification::Constant, value);
 
-    DPRINTF(EgDiff, "[tick:%llu] publish PC %#x sn:%llu val %#x\n",
-            curTick(), inst->pcState().instAddr(), inst->seqNum, value);
+    DPRINTF(EgDiff, "[tick:%llu] publish PC %#x sn:%llu val %#x%s\n",
+            curTick(), inst->pcState().instAddr(), inst->seqNum, value,
+            deferred ? " (deferred)" : "");
 
     if (wake) {
         // Wake only the register dependents; the load itself still executes
@@ -530,7 +550,7 @@ IEW::lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid, bool wake)
 
 void
 IEW::lvpSchedule(const DynInstPtr &inst, RegVal value, ThreadID tid,
-                 unsigned latency, bool wake)
+                 unsigned latency, bool wake, bool deferred)
 {
     if (!inst)
         return;
@@ -539,6 +559,9 @@ IEW::lvpSchedule(const DynInstPtr &inst, RegVal value, ThreadID tid,
         // Legacy immediate path (used by all existing gates).  Do not apply
         // the isInROB() filter here: dispatch has not necessarily installed
         // the ROB entry yet.
+        if (deferred && cpu->lvp)
+            cpu->lvp->publishDeferred(inst->seqNum);
+
         if (inst->numDestRegs() > 0) {
             PhysRegIdPtr destReg = inst->renamedDestIdx(0);
             // The legacy normal path did not skip a pinned destination; the
@@ -556,12 +579,86 @@ IEW::lvpSchedule(const DynInstPtr &inst, RegVal value, ThreadID tid,
         return;
     }
 
-    auto *ev = new EventFunctionWrapper(
-        [this, inst, value, tid, wake]() {
-            lvpPublish(inst, value, tid, wake);
-        },
-        "EgDiffPredictionPublish", true);
-    cpu->schedule(ev, cpu->clockEdge(Cycles(latency)));
+    // Latency > 0: the value is computed now but must not become visible
+    // until `latency` cycles have elapsed.  In particular the instruction's
+    // IQ destination must stay not-ready (see InstructionQueue::
+    // addToProducers) or dependents would consume stale PRF data.
+    inst->setLVPPredictionPending();
+
+    LVPPendingPublish &p = lvpPending[inst->seqNum];
+    p.inst = inst;
+    p.value = value;
+    p.tid = tid;
+    p.wake = wake;
+    p.deferred = deferred;
+    p.readyTick = cpu->clockEdge(Cycles(latency));
+
+    DPRINTF(EgDiff, "[tick:%llu] schedule-publish PC %#x sn:%llu val %#x "
+            "at %llu (+%u%s)\n", curTick(), inst->pcState().instAddr(),
+            inst->seqNum, value, p.readyTick, latency,
+            deferred ? " deferred" : "");
+}
+
+void
+IEW::lvpCancelPendingUpTo(InstSeqNum seqNum)
+{
+    for (auto it = lvpPending.begin(); it != lvpPending.end(); ) {
+        if (it->first <= seqNum) {
+            if (it->second.inst &&
+                it->second.inst->lvpPredictionPending())
+                it->second.inst->clearLVPPredictionPending();
+            DPRINTF(EgDiff, "[tick:%llu] cancel-publish sn:%llu\n",
+                    curTick(), it->first);
+            it = lvpPending.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void
+IEW::lvpCancelPendingFrom(InstSeqNum seqNum)
+{
+    for (auto it = lvpPending.begin(); it != lvpPending.end(); ) {
+        if (it->first > seqNum) {
+            if (it->second.inst &&
+                it->second.inst->lvpPredictionPending())
+                it->second.inst->clearLVPPredictionPending();
+            DPRINTF(EgDiff, "[tick:%llu] squash-cancel-publish sn:%llu\n",
+                    curTick(), it->first);
+            it = lvpPending.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void
+IEW::lvpServicePending()
+{
+    if (lvpPending.empty())
+        return;
+
+    // Keep the CPU awake while a publish is outstanding so tick() is called
+    // even if every other pipeline stage happens to be idle.
+    cpu->activityThisCycle();
+
+    const Tick now = curTick();
+    // Collect first: lvpPublish() may insert new entries indirectly.
+    std::vector<InstSeqNum> due;
+    for (const auto &e : lvpPending) {
+        if (e.second.readyTick <= now)
+            due.push_back(e.first);
+    }
+
+    for (InstSeqNum sn : due) {
+        auto it = lvpPending.find(sn);
+        if (it == lvpPending.end())
+            continue;
+        LVPPendingPublish p = it->second;
+        lvpPending.erase(it);
+        lvpPublish(p.inst, p.value, p.tid, p.wake, p.deferred);
+    }
 }
 
 void
@@ -577,7 +674,7 @@ IEW::lvpWakeDeferred(DynInst *inst, RegVal value)
     // Hold a reference so a delayed publish cannot outlive the instruction.
     DynInstPtr hold(inst);
     lvpSchedule(hold, value, tid, cpu->lvp->egdiffDeferredLatencyCycles(),
-                /*wake=*/true);
+                /*wake=*/true, /*deferred=*/true);
 }
 
 void
@@ -1121,23 +1218,27 @@ IEW::dispatchInsts(ThreadID tid)
                         inst->seqNum, instPC, inst.get());
 
                     if (result.valid) {
-                        inst->setLVPPrediction(
-                            lvp::LVPClassification::Constant, result.value);
+                        // Compute the prediction now, but make it visible only
+                        // after the modelled normal latency.  For latency 0
+                        // this is the historical immediate publish; for
+                        // latency > 0 the instruction must not be marked
+                        // predicted yet, otherwise the IQ marks the
+                        // destination ready at dispatch and consumers read
+                        // stale physical-register data.
+                        const unsigned normalLatency =
+                            cpu->lvp->egdiffLatencyCycles();
 
-                        // The normal-latency event path is withdrawn: a
-                        // delayed PRF publish for every predicted load is not
-                        // safe with gem5's physical-register lifetime.  The
-                        // paper's normal 3-cycle latency is modelled by the
-                        // PoC probe-issue delay proxy instead; the deferred
-                        // +2 path uses lvpSchedule() and is validated.
-                        lvpSchedule(inst, result.value, tid, 0,
-                                    /*wake=*/false);
+                        // A non-zero normal latency needs the consumers to be
+                        // woken when the value actually appears; the
+                        // immediate path historically did not need a wake
+                        // because the IQ was told "ready" at insertion.
+                        lvpSchedule(inst, result.value, tid, normalLatency,
+                                    /*wake=*/normalLatency != 0);
 
                         DPRINTF(EgDiff, "[tick:%llu] schedule PC %#x "
-                            "[sn:%llu] predicted val %#x (d=%u, immediate; "
-                            "normal latency via probe-delay proxy)\n",
+                            "[sn:%llu] predicted val %#x (d=%u, +%u cycles)\n",
                             curTick(), instPC, inst->seqNum, result.value,
-                            result.distance);
+                            result.distance, normalLatency);
                     }
                 } else {
                     // effSize is 0 at dispatch (set during execute).
@@ -1611,6 +1712,11 @@ IEW::tick()
         checkSignalsAndUpdate(tid);
         dispatch(tid);
     }
+
+    // Publish any EgDiff prediction whose latency has now elapsed.  This
+    // runs after squash handling, so an instruction squashed this cycle can
+    // never have its destination written.
+    lvpServicePending();
 
     if (exeStatus != Squashing) {
         executeInsts();

@@ -60,6 +60,7 @@ struct EgDiffSpecEntry
     uint8_t distance = 0;   // 5-bit distance used for this prediction
     uint64_t diff = 0;      // 64-bit diff used for this prediction
     bool vp = false;        // a valid prediction has been written
+    bool pending = false;   // predicted value not yet published to the PRF
     bool misp = false;      // verification detected a mismatch
     bool avail = false;     // the actual load has completed in the LQ
     uint64_t wakeSeqNum = 0;// 0 = unbound; else seqNum of deferred dependent
@@ -170,6 +171,15 @@ class EgDiffPredictor
      * wakeup for a dependent that was bound to this load as its base.
      */
     EgDiffCompleteResult completeLoad(uint64_t seqNum, RegVal actualVal);
+
+    /**
+     * Make a deferred prediction visible.  Called by the microarchitecture
+     * when the deferred publish latency has elapsed, immediately before the
+     * destination register is written and the dependents are woken.  Until
+     * this runs the prediction is only `pending`, so a load that completes
+     * early is not verified against a value that was never delivered.
+     */
+    void publishDeferred(uint64_t seqNum);
 
     /** Drop speculative state for all loads younger than the squash bound.
      *  Returns the number of dangling Wake bindings that were cleared. */

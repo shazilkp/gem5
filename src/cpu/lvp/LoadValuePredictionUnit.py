@@ -80,9 +80,11 @@ class LoadValuePredictionUnit(SimObject):
 
     egdiffLatency = Param.Unsigned(
         0,
-        "Reserved; must be 0. The paper's normal 3-cycle latency is modelled "
-        "by the PoC probe-issue delay proxy. The delayed normal-publish event "
-        "path is withdrawn because it corrupts physical-register lifetime."
+        "EgDiff normal prediction latency in cycles (paper: 3). The value is "
+        "computed at dispatch but only written to the destination register, "
+        "marked ready, and used to wake dependents after this many cycles. "
+        "Zero preserves the historical immediate-publish behaviour. "
+        "Supported range: 0..16."
     )
     egdiffDeferredLatency = Param.Unsigned(
         0,

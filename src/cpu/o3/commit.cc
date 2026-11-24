@@ -1027,6 +1027,12 @@ Commit::commitInsts()
                 // an already-committed load.
                 if (cpu->lvp && cpu->lvp->isEnabled() &&
                     cpu->lvp->isEgDiff() && head_inst->isLoad()) {
+                    // The load has committed: any outstanding publish for it
+                    // is pointless and must not fire, because its physical
+                    // destination may be freed and re-allocated as soon as a
+                    // later writer of the same architectural register commits.
+                    iewStage->lvpCancelPendingUpTo(head_inst->seqNum);
+
                     if (head_inst->fault == NoFault) {
                         ThreadID ltid = head_inst->threadNumber;
                         RegVal committedVal = 0;
