@@ -216,10 +216,15 @@ loads, so `d > 32`. Monocypher `crypto_verify32` (`d = 7…14`) recovers only
 `key[24..31]` (the last 8-byte word); the preceding word is at ≈15–22, the next
 at ≈23–30, and the first at ≈31–38, so two more words are in-window in principle
 but were not demonstrated. In both, the target TU owns the key and the attacker
-TU never names it. The A4 harness warms the key line with
-`target_verify32_selfcheck()` and two `target_verify32(guess)` calls before the
-measured lane, so the common path is base-available (NVQ), not the deferred
-path; a cold-key variant is the honest deferred test.
+TU never names it. The A4 harness can warm the key line with
+`target_verify32_selfcheck()` and two `target_verify32(guess)` calls; in that
+case the common path is base-available (NVQ), not the deferred path. A
+`COLD_KEY=1` variant removes those calls, and a `VARY_GUESS=1` variant changes
+the guess on every attempt. **Both cold and variable-input variants still
+recover 8/8** in this model, and cold SipHash still recovers 16/16
+(`RESULTS_target_controls.md`). The real-target mechanism is therefore
+**GVQ/NVQ forwarding**, not exclusively in-flight `SpecGVQ`. The warm-up is
+disclosed but not required in these runs.
 
 **Distance map.** `d` is a property of the compiled binary (compiler, flags,
 library version), not of the source function. The SipHash constants must be
@@ -266,7 +271,7 @@ discovery of `d` (trying all 32 positions) is not demonstrated.
 
 ## 7. Results
 
-### 7.1 Behavioural ballpark (SPEC CPU2017, 30 M instructions, commit-based)
+### 7.1 SPEC smoke test (first 30 M instructions from `_start`; not conformance)
 
 | benchmark | committed loads | coverage | accuracy |
 |---|---|---|---|
@@ -274,23 +279,25 @@ discovery of `d` (trying all 32 positions) is not demonstrated.
 | 544.nab | 5,527,140 | 28.38 % | 99.60 % |
 | 548.exchange2 | 4,951,309 | 17.52 % | 99.49 % |
 | 510.parest | 5,161,173 | 22.84 % | 99.83 % |
-| **mean (unweighted)** | | **33.3 %** | **99.73 %** |
+| 531.deepsjeng | 22,357 | 2.29 % | 95.35 % |
+| **mean (5, unweighted)** | | **27.11 %** | **98.85 %** |
 
-Excluding pointer-chasing `505.mcf`, the remaining three average **22.9 %
-coverage** (23.0 % from unrounded values), at the lower edge of the paper's
-reported 22–26 %, with accuracy 99.5–99.8 %. This is a ballpark check, not a
-reproduction (different ISA, hash, hierarchy, window; no SimPoints, no warm-up
-split; unweighted means).
+These are **not** the paper's 50 M warm-up + 100 M SimPoint windows. `505.mcf`'s
+64.51 % is first-30 M startup behaviour (node/arc array initialisation); the
+paper's Fig. 10(b) shows its steady-state coverage below 10 %. The four/five
+benchmark means therefore must **not** be compared with the paper's 22–26 %
+band, and the earlier "excluding mcf gives 22.9 %" reading is withdrawn. What
+the table supports is narrower: on real RISC-V binaries the model predicts at
+high accuracy with non-zero coverage, i.e. it behaves like a plausible value
+predictor rather than a broken one.
 
-Exclusions, with numbers where measured: `519.lbm` (SE register-only spin; 4k
-loads in 10M instructions), `503.bwaves` (exits after ~138k instructions),
-`557.xz` (~2M misprediction squashes; 8× slower), and `531.deepsjeng` (first 30M
-instructions zero a 720 MB hash table; **2.29 % coverage / 95.35 % accuracy**,
-22,357 committed loads). Including `531.deepsjeng` gives a five-benchmark
-unweighted mean of **27.11 % / 98.85 %**, versus 33.3 % / 99.73 % for the four.
-The exclusions are workload-shape choices, made before the attack study, but
-they move both headline numbers toward the paper's band and should be read as
-such.
+We report all five attempted benchmarks; none is dropped to fit the paper. The
+excluded set remains `519.lbm` (SE register-only spin; 4k loads in 10 M),
+`503.bwaves` (exits after ~138k instructions), and `557.xz` (~2 M
+misprediction squashes; 8× slower), with reasons. Configuration also differs
+from the paper's Table II: TournamentBP instead of L-TAGE, 256/256 physical
+registers instead of 168/168, no L3 or stride prefetcher, and the SPEC runs use
+0-cycle predictor latency. F2 is a smoke test, not a conformance result.
 
 ### 7.2 Prevalence of the `d <= 32` shape (6,300 calls, 300 per input mode)
 
@@ -433,20 +440,22 @@ register-level forwarding would remain.
    hand-written controls, one function per library. The fault probe
    over-approximates; min-over-PCs is optimistic for lookup/walk; the three modes
    replay 300 inputs and are not independent samples.
-9. **Narrow real targets.** A4 demonstrates one key word, with a warmed key line;
-   SipHash is empty-message only, also warmed. `memcmp`/`strcmp`/hash/list are
-   precondition measurements, not attacks. `crypto_verify32`'s full 32-byte key
-   is not recovered.
+9. **Narrow real targets.** A4 demonstrates one key word; both warm and cold
+   key-line variants recover it, but the full 32-byte key is not recovered.
+   SipHash is empty-message only; cold and warm variants both recover 16/16.
+   `memcmp`/`strcmp`/hash/list are precondition measurements, not attacks.
 10. **Build sensitivity.** `d` depends on compiler, flags and library version.
     A3 is a property of these binaries, not of the source functions.
 11. **Victim and attacker prediction behaviour is assumed.** The victim's
     sensitive loads are assumed predictable/pre-trained; a victim misprediction
     would squash the window. The attacker pays one squash and a 1024-instruction
     blackout per byte (369 incorrect in A4, 506 in SipHash).
-12. **Constant-data victims.** Both real targets process a constant key, an
-    all-zero guess and an empty message, so the victim's own loads never lock and
-    never self-squash. A variable-data victim (MAC over a chosen message) is the
-    obvious missing experiment.
+12. **Input variation.** The baseline victims use a constant key and a constant
+    attacker input. A `VARY_GUESS=1` A4 variant (different guess every attempt)
+    still recovers 8/8, because the shared `load64_le` PC alternates key/guess
+    values and does not lock; that is a robustness result, not a full realistic
+    workload. A MAC over a chosen message remains the missing external-validity
+    experiment.
 13. **Defences untested (deferred).** SafeSpec/DoM are expected to block the
     cache observation while leaving the forwarding intact. This is explicit
     future work, not part of the present scope; the impact claim therefore

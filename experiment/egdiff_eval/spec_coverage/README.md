@@ -89,13 +89,11 @@ Outputs `spec_f2.csv` and a table. Each benchmark runs from its own SPEC
 
 ## What the result is used for
 
-If accuracy is in the high 90s and coverage is in the low-to-mid tens of
-percent, the model behaves like the paper's design and the attack rests on a
-realistic predictor. If coverage collapses, something in the model (hash,
-allocation policy, confidence) is wrong and should be found before any further
-attack claims.
+Only a **smoke test**: does the model predict at high accuracy with non-zero
+coverage on real binaries, rather than collapsing? It is not a conformance
+result and must not be compared with the paper's steady-state numbers.
 
-## Result (30M instructions, commit-based)
+## Result (first 30M instructions from `_start`, commit-based)
 
 | benchmark | committed loads | coverage | accuracy |
 |---|---|---|---|
@@ -103,17 +101,20 @@ attack claims.
 | 544.nab | 5,527,140 | 28.38% | 99.60% |
 | 548.exchange2 | 4,951,309 | 17.52% | 99.49% |
 | 510.parest | 5,161,173 | 22.84% | 99.83% |
+| 531.deepsjeng | 22,357 | 2.29% | 95.35% |
+| **mean (5, unweighted)** | | **27.11%** | **98.85%** |
 
-Mean over the four (unweighted over benchmarks, not pooled by load count):
-**33.3% coverage, 99.73% accuracy**. Excluding `505.mcf` (pointer chasing, the
-paper's own motivating shape, hence high coverage), the other three average
-**22.9% coverage** (23.0% from unrounded values), at the lower edge of the
-paper's reported 22–26%, with accuracy 99.5–99.8% against the paper's >99%.
-The fifth attempted benchmark, `531.deepsjeng`, is excluded from both means: a
-30M-instruction pilot measured **2.29% coverage / 95.35% accuracy** (22,357
-committed loads) while the window was still zeroing a 720 MB hash table;
-including it gives a five-benchmark unweighted mean of **27.11% / 98.85%**. The
-exclusion is a workload-shape choice, not a filter on the attack.
+**Do not compare these with the paper's 22–26% band.** The window is the first
+30M instructions from `_start`, with no warm-up; the paper uses 50M warm-up +
+100M SimPoints. `505.mcf`'s 64.51% is startup array initialisation, not pointer
+chasing: the paper's Fig. 10(b) shows its steady-state coverage below 10%. The
+earlier "excluding mcf gives 22.9%" reading is withdrawn. All five attempted
+benchmarks are reported; the excluded set is `519.lbm`, `503.bwaves` and
+`557.xz`, with the reasons above.
+
+The configuration also differs from the paper's Table II: TournamentBP instead
+of L-TAGE, 256/256 physical registers instead of 168/168, no L3 or stride
+prefetcher, and 0-cycle predictor latency in these SPEC runs.
 
 Raw per-benchmark rows are checked in as `spec_f2.csv` (this directory).
 

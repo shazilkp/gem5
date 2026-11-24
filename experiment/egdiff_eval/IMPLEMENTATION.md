@@ -289,19 +289,23 @@ meaningless on branchy code.
 | 544.nab | 5,527,140 | 28.38% | 99.60% |
 | 548.exchange2 | 4,951,309 | 17.52% | 99.49% |
 | 510.parest | 5,161,173 | 22.84% | 99.83% |
+| 531.deepsjeng | 22,357 | 2.29% | 95.35% |
+| **mean (5, unweighted)** | | **27.11%** | **98.85%** |
 
-Mean over the four: **33.3% coverage, 99.73% accuracy**; excluding `505.mcf`
-(pointer chasing — the paper's own motivating shape — hence high coverage), the
-remaining three average **22.9% coverage**, inside the paper's reported 22–26 %,
-with accuracy 99.5–99.8 % against the paper's >99 %.
+These are first-30M-from-`_start` numbers, with no warm-up. `505.mcf`'s 64.51%
+is startup array initialisation; the paper's Fig. 10(b) puts its steady-state
+coverage below 10%. The means are therefore **not comparable** to the paper's
+22–26% band, and the earlier "excluding mcf gives 22.9%" claim is withdrawn.
+What this supports is only that the model predicts at high accuracy with
+non-zero coverage on real binaries.
 
 Excluded, with reasons recorded in the README: `519.lbm` (SE register-only spin),
-`503.bwaves` (exits after ~138k instructions), `557.xz` (squash-heavy, 8x slower),
-`531.deepsjeng` (first 30M instructions are a 720 MB hash-table zeroing loop).
+`503.bwaves` (exits after ~138k instructions), `557.xz` (squash-heavy, 8x slower).
+`531.deepsjeng` is reported in the table; its first 30M instructions are a 720 MB
+hash-table zeroing loop.
 
-**Conclusion for F2:** the model behaves like the paper's predictor in the
-aggregate — high accuracy and coverage in the expected band. It is not a
-reproduction of the paper's per-benchmark numbers (different ISA, hash, memory
+**Conclusion for F2:** this is a **smoke test**, not conformance. It is not a
+reproduction of the paper's steady-state per-benchmark numbers (different ISA, hash, memory
 hierarchy, window length, no SimPoints).
 
 ### A4 / Layer 6 — real Monocypher target in gem5 (PASS, 36/36)
@@ -536,7 +540,7 @@ has a constant stride. This does not weaken the attack: the attacker controls
 - [ ] `run_layer2.sh` → `LAYER 2 PASSED` (10 checks).
 - [ ] `run_layer3.sh` → `LAYER 3 PASSED` (13 checks, incl. phase attribution and the
       `EGDIFF_ON=0` negative control).
-- [ ] `run_layer4.sh` → `LAYER 4 PASSED` (14 checks, both modes + isolation + controls).
+- [ ] `run_layer4.sh` → `LAYER 4 PASSED` (17 checks, both modes + isolation + controls).
 - [ ] `run_layer5.sh` → `LAYER 5 PASSED` (24 checks, SipHash target + isolation + controls).
 - [ ] `run_layer6.sh` → `LAYER 6 PASSED` (36 checks, Monocypher verify32 target + controls).
 - [ ] With `EGDIFF_ON=0`, Layer 1/2 tests still produce exact checksums and zero
