@@ -1,31 +1,22 @@
-\documentclass[10pt,twocolumn]{article}
-\usepackage[margin=0.62in]{geometry}
-\setlength{\columnsep}{0.24in}
-\usepackage{times}
+\documentclass[conference]{IEEEtran}
 \usepackage[T1]{fontenc}
-\usepackage{microtype}
+\usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{tikz}
 \usetikzlibrary{decorations.pathreplacing}
 \usepackage[hidelinks]{hyperref}
-\setlength{\parskip}{2pt}
-\setlength{\parindent}{1.1em}
 \newcommand{\code}[1]{\texttt{\small #1}}
 
-\title{\vspace{-1.2em}\textbf{Distance Is Not Identity:}\\[2pt]
-Cross-Instruction Value Forwarding in EgDiff's\\
-Untagged Speculative Value Queue}
-\author{Anonymous Workshop Submission}
-\date{}
+\title{Distance Is Not Identity: Cross-Instruction Value Forwarding in
+EgDiff's Untagged Speculative Value Queue}
+\author{\IEEEauthorblockN{Anonymous Submission}\\
+\IEEEauthorblockA{Anonymous Workshop on Hardware Security}}
 
 \begin{document}
-\twocolumn[
-\begin{@twocolumnfalse}
 \maketitle
-\vspace{-2.2em}
+
 \begin{abstract}
-\noindent
 Global load-value predictors guess a load's result from an earlier,
 different load plus a learned offset. EgDiff (ISCA 2026) makes this
 practical with a compact table, a speculative global value queue, and
@@ -48,8 +39,11 @@ primitives we measured ($d\ge 85$). This is a design-level
 vulnerability analysis in a simulator, not a hardware or real-world
 exploit.
 \end{abstract}
-\end{@twocolumnfalse}
-]
+
+\begin{IEEEkeywords}
+value prediction, microarchitectural security, speculative execution,
+gem5, cache side channel
+\end{IEEEkeywords}
 
 \section{Introduction}
 
