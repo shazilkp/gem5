@@ -97,16 +97,16 @@ result and must not be compared with the paper's steady-state numbers.
 
 | benchmark | committed loads | coverage | accuracy |
 |---|---|---|---|
-| 505.mcf | 6,426,344 | 64.51% | 99.99% |
-| 544.nab | 5,527,140 | 28.38% | 99.60% |
-| 548.exchange2 | 4,951,309 | 17.52% | 99.49% |
-| 510.parest | 5,161,173 | 22.84% | 99.83% |
-| 531.deepsjeng | 22,357 | 2.29% | 95.35% |
-| **mean (5, unweighted)** | | **27.11%** | **98.85%** |
+| 505.mcf | 6,426,344 | 64.48% | 99.99% |
+| 544.nab | 5,527,140 | 27.48% | 99.60% |
+| 548.exchange2 | 4,951,309 | 17.35% | 99.52% |
+| 510.parest | 5,161,173 | 22.70% | 99.83% |
+| 531.deepsjeng | 22,357 | 2.20% | 95.16% |
+| **mean (5, unweighted)** | | **26.84%** | **98.82%** |
 
 **Do not compare these with the paper's 22–26% band.** The window is the first
 30M instructions from `_start`, with no warm-up; the paper uses 50M warm-up +
-100M SimPoints. `505.mcf`'s 64.51% is startup array initialisation, not pointer
+100M SimPoints. `505.mcf`'s 64.48% is startup array initialisation, not pointer
 chasing: the paper's Fig. 10(b) shows its steady-state coverage below 10%. The
 earlier "excluding mcf gives 22.9%" reading is withdrawn. All five attempted
 benchmarks are reported; the excluded set is `519.lbm`, `503.bwaves` and

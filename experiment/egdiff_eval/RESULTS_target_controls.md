@@ -40,6 +40,16 @@ constant input” objection, not the broader external-validity question.
 The cold variant still recovers both key words.  The empty-message path and the
 one-call-per-byte structure remain limitations.
 
+## Independent audit additions
+
+The zero-knowledge audit rebuilt A4 with a **different key word**
+(`0x8877665544332211`) and recovered exactly that word, 8/8 — the leak tracks
+the victim's secret rather than a hard-coded harness value. It also built a
+stub in which the key loads are removed: the estimator still reports
+`known=ff` and eight zero bytes, and the oracle reports `NO-MATCH`. That is the
+expected semantics of `known`: it is an emission mask, not a provenance
+certificate. See `AUDIT_zero_knowledge.md`.
+
 ## What this changes
 
 - The “Mode 1 = pure in-flight SpecGVQ” label is too narrow.  The real-target

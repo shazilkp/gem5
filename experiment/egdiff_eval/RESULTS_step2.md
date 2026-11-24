@@ -53,9 +53,11 @@ The two negative controls use the **same binary**:
 | `egdiff`, off | `0000000000000000` | `0000000000000000` | 0/16 | 0/80 | NO-MATCH |
 | `flop`, on    | `0000000000000000` | `0000000000000000` | 0/16 | 0/80 | NO-MATCH |
 
-All three runs report `arch=OK` and the **same architectural checksum**
-`sink=8976677841604280768`, i.e. the architectural execution is identical and
-the controls genuinely execute the same code; only the forwarded value differs.
+All three runs report `arch=OK` and the same `sink` accumulator
+(`8976677841604280768`). `sink` is **not** an architectural checksum: it is a
+harness accumulator that is identical by construction. The meaningful controls
+are `archpre` and the oracle's exact key-word match; `sink` only detects gross
+divergence.
 
 Predictor statistics, `EgDiff` run (`stats.txt`):
 
@@ -64,7 +66,7 @@ egdiffPredictions        181850   (values forwarded at dispatch)
 egdiffNVQBases            59775   (base came from the committed NVQ)
 egdiffDeferredPredictions  5531   (deferred Wake path; also exercised)
 egdiffDeferredIgnored     19837
-numPredictionIncorrect      506   (includes the 80 measurement mispredictions)
+numPredictionIncorrect      506   (current gate: 472; includes the 80 measurement mispredictions)
 numPredictionCorrect     184888
 ```
 

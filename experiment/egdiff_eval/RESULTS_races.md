@@ -40,7 +40,7 @@ data access/verification.
 
 | divisions | result | known |
 |---|---|---|
-| 0 | NO-MATCH | 00 |
+| 0 | NO-MATCH (partial) | e0 (3/8: bytes 5–7) |
 | **1** | **MATCH** | **ff** |
 | 2 | MATCH | ff |
 | 3 | MATCH | ff |
@@ -54,8 +54,13 @@ data access/verification.
 
 Interpretation:
 
-- The race is real: with **zero** delay the attack fails; with **one** division
-  it recovers all 8 bytes. Twelve divisions were conservative.
+- The original zero-delay row was **invalid**: with no divisions, `x = ok|1`
+  made the marker read `atk_buf[1] = 0`, not the sentinel, so the calibration
+  line vanished and every attempt was `invalid`. After fixing the zero-delay
+  address to `0`, it recovers **3/8** bytes (`0x33`, `0x22`, `0x11`), while
+  **one** division recovers all 8. The race is therefore partial at zero delay
+  and complete at one division; the 0 control is no longer a clean failure.
+  Twelve divisions were conservative.
 - The `DIVS=4` run at REPS=16 lost one byte (`known=ef`): byte 4 had **0/16
   informative attempts** (all `sentinel_only`), so the estimator abstained
   rather than fabricating. With `REPS=32`, the same configuration recovers

@@ -191,9 +191,10 @@ class EgDiffPredictor
     void retireFront(uint64_t seqNum);
 
     /**
-     * Count every instruction dispatched on the correct path.  The lastMisp
-     * window is a 1024-instruction window, not a fetch-sequence-number
-     * interval: squashed wrong-path instructions must not consume it.
+     * Count every instruction that reaches dispatch after the squash.  The
+     * lastMisp window is a 1024-instruction window, not a fetch-sequence-number
+     * interval.  This is an approximation of the paper's correct-path window:
+     * a later wrong-path instruction can still be counted until its own squash.
      */
     void dispatchInstruction() { ++instructionCount; }
 

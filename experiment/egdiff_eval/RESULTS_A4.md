@@ -172,7 +172,7 @@ egdiffNVQBases            29896
 egdiffTableAllocations      247
 egdiffPollingSteps       348433
 numPredictionCorrect     278392
-numPredictionIncorrect      369
+numPredictionIncorrect      369   (current gate: 355; build-dependent)
 ```
 
 The incorrect predictions are the measured marker loads (predicted key byte vs.

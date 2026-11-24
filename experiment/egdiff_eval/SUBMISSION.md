@@ -104,8 +104,9 @@ exculpatory.
 modelled with a pending-publish stage (IQ ready gating, `IEW` pending map,
 cancel on commit/squash). PRF port pressure and write elision are not modelled;
 that is the remaining performance omission. Cache timing *is* modelled, because
-the observable is a cache-probe hit/miss. The Mode 1 address-delay sweep shows
-the attack fails at 0 divisions and recovers at 1; the cycle trace gives a
+the observable is a cache-probe hit/miss. The Mode 1 address-delay sweep recovers
+**3/8** bytes at 0 divisions and **8/8** at 1; the 0-division control had to be
+fixed to read the sentinel rather than `atk_buf[1]`. The cycle trace gives a
 probe-request-to-verification margin of 54–185 cycles at 1 division (avg 62) and
 115–331 at 12 (avg 197).
 
@@ -170,6 +171,10 @@ from the paper in `PAPER_NOTES.md` (Section III-B): every candidate allocates a
 `SpecGVQ` entry, and the base is retrieved by distance with no base tag. The
 gates test the implementation of those rules; they do not independently prove
 the paper's text.
+
+Two of the 117 checks are `sink`-equality sanity checks that are identical by
+construction and cannot fail; the **effective evidence count is 115**. `sink` is
+used only to detect gross divergence, not as an architectural checksum.
 
 These are **trace-presence assertions, not an equivalence proof**. Several Layer-1
 checks match a value anywhere in the trace rather than for the tested load in the
@@ -279,15 +284,15 @@ discovery of `d` (trying all 32 positions) is not demonstrated.
 
 | benchmark | committed loads | coverage | accuracy |
 |---|---|---|---|
-| 505.mcf | 6,426,344 | 64.51 % | 99.99 % |
-| 544.nab | 5,527,140 | 28.38 % | 99.60 % |
-| 548.exchange2 | 4,951,309 | 17.52 % | 99.49 % |
-| 510.parest | 5,161,173 | 22.84 % | 99.83 % |
-| 531.deepsjeng | 22,357 | 2.29 % | 95.35 % |
-| **mean (5, unweighted)** | | **27.11 %** | **98.85 %** |
+| 505.mcf | 6,426,344 | 64.48 % | 99.99 % |
+| 544.nab | 5,527,140 | 27.48 % | 99.60 % |
+| 548.exchange2 | 4,951,309 | 17.35 % | 99.52 % |
+| 510.parest | 5,161,173 | 22.70 % | 99.83 % |
+| 531.deepsjeng | 22,357 | 2.20 % | 95.16 % |
+| **mean (5, unweighted)** | | **26.84 %** | **98.82 %** |
 
 These are **not** the paper's 50 M warm-up + 100 M SimPoint windows. `505.mcf`'s
-64.51 % is first-30 M startup behaviour (node/arc array initialisation); the
+64.48 % is first-30 M startup behaviour (node/arc array initialisation); the
 paper's Fig. 10(b) shows its steady-state coverage below 10 %. The four/five
 benchmark means therefore must **not** be compared with the paper's 22–26 %
 band, and the earlier "excluding mcf gives 22.9 %" reading is withdrawn. What
@@ -335,20 +340,28 @@ state dependent).
 | Monocypher `crypto_verify32` | 8/8 bytes of `key[24..31]`, `d = 7…14`, 16 votes/lane | off/FLOP: 0/8 |
 
 In A4 the gem5 trace shows, for each key byte, 16 predictions whose `base_val` is
-that byte (18 for `0x10`; the extra two are not filtered by dependent PC); when
-the base was still speculative, `base_pc` is the key-load PC (`0x10f58 = lbu
-a5,0(a0)`, `0x10f7e = lbu a0,7(a0)` in that build; the current build measures
-`0x10f60`/`0x10f86`), and when it had committed, `base_pc = 0`
-(the NVQ stores values, not PCs). The baseline harness warms the key line before
-the measured lane, so most wins are NVQ-sourced; a `COLD_KEY=1` variant removes
-the warm-up calls and still recovers 8/8, so the mechanism is GVQ/NVQ forwarding,
+that byte (18 for `0x10`; the extra two are not filtered by dependent PC). In
+the recorded A4 and SipHash runs, **every victim-phase base was NVQ**
+(`base_pc = 0`): the key load had committed before the marker dispatched, so
+the real-target evidence exercises the non-speculative segment, not the
+speculative queue that the paper describes as the prediction path. That NVQ-base
+path is our transcribed Rule C extension, not an explicit paper prediction path;
+the real-target results are therefore not a paper-faithful `SpecGVQ`
+demonstration. The crafted Mode 1/2 experiments are the speculative-queue
+evidence. The baseline harness
+warms the key line before the measured lane; a `COLD_KEY=1` variant removes the
+warm-up calls and still recovers 8/8, so the mechanism is GVQ/NVQ forwarding,
 not exclusively in-flight `SpecGVQ`. A one-call `memcmp` probe gives
 architectural `d = 1` and dispatch `d = 1` for both the equal and early-exit
 cases; it has no branch between the last compared byte and the return, so it
 does not exercise the wrong-path risk. A4's earliest byte is `d = 14` (margin
-18), not the `d = 7` used for the prevalence margin argument. The A4 run has
-`numPredictionIncorrect = 369`; the SipHash run has 506 (including the 80
-measurement mispredictions). Each leaked byte therefore costs a squash and a
+18), not the `d = 7` used for the prevalence margin argument. The current A4
+gate has `numPredictionIncorrect = 355`; SipHash has 472 (earlier committed
+notes reported 369/506; the counts are build-dependent). `known` is an
+emission mask, not a provenance certificate: a byte is marked known when the
+estimator accepts a cache line, and the oracle's exact-word comparison is the
+correctness test. A stubbed-key run can emit zeros with `known=ff` and
+`NO-MATCH`. Each leaked byte therefore costs a squash and a
 1024-instruction global blackout: the attack has a loud per-leak signature, and
 the "no timing claim" scope does not cover it.
 
@@ -402,7 +415,7 @@ register-level forwarding would remain.
    trace shows +3/+2. PRF port pressure and write elision remain unmodelled.
    A probe-issue delay proxy (3/5 instructions) is retained as an independent
    sensitivity and also recovers. Cache-probe timing *is* modelled. Mode 1's
-   address-delay sweep shows the attack fails at 0 divisions and recovers at
+   address-delay sweep recovers **3/8** bytes at 0 divisions and **8/8** at
    **1**; the cycle trace gives a probe-request-to-verification margin of
    **54–185 cycles** at 1 division (avg 62) and **115–331** at 12 (avg 197). A
    branch-squash control (`squash` line 16 cycles vs `none` 116) shows the fill
@@ -458,7 +471,8 @@ register-level forwarding would remain.
 11. **Victim and attacker prediction behaviour is assumed.** The victim's
     sensitive loads are assumed predictable/pre-trained; a victim misprediction
     would squash the window. The attacker pays one squash and a 1024-instruction
-    blackout per byte (369 incorrect in A4, 506 in SipHash).
+    blackout per byte (current gates: 355 incorrect in A4, 472 in SipHash;
+    build-dependent).
 12. **Input variation.** The baseline victims use a constant key and a constant
     attacker input. A `VARY_GUESS=1` A4 variant (different guess every attempt)
     still recovers 8/8, because the shared `load64_le` PC alternates key/guess
@@ -469,9 +483,10 @@ register-level forwarding would remain.
     cache observation while leaving the forwarding intact. This is explicit
     future work, not part of the present scope; the impact claim therefore
     remains conditional on an undefended hierarchy.
-14. **SPEC is a 30M window without warm-up**, unweighted, with four excluded
-    benchmarks (one at 95.35 % accuracy). Accuracy is not a strict commit-only
-    ratio (§6). It is a ballpark check, not a conformance proof.
+14. **SPEC is a 30M window without warm-up**, unweighted, with three excluded
+    benchmarks (`519.lbm`, `503.bwaves`, `557.xz`); `531.deepsjeng` is reported.
+    Accuracy is not a strict commit-only ratio (§6). It is a startup smoke test,
+    not a conformance proof; the 22.9 % band comparison is withdrawn.
 15. **Reproducibility.** Monocypher is pinned (`third_party/README.md`) but not
     vendored; SPEC binaries are external, but `spec_f2.csv` is checked in. The
     working tree has an uncommitted `src/mem/cache/base.cc` hunk from the
@@ -484,7 +499,11 @@ register-level forwarding would remain.
     is ~100 bytes of SRAM plus a comparator; tagging it would very likely
     eliminate the attack at modest cost. This is a design recommendation, not a
     measured fix.
-18. **Pipeline-detail scope.** Prefetch/zero-destination loads are now skipped
+18. **lastMisp is an approximation.** The window counts instructions dispatched
+    after the squash, not only committed correct-path instructions; a later
+    wrong-path instruction can still consume slots before its own squash. The
+    Layer-2 gate checks the window by sequence numbers, not by this counter.
+19. **Pipeline-detail scope.** Prefetch/zero-destination loads are now skipped
     from the GVQ/NVQ, but the model targets the paper's LQ=32 and silently drops
     allocations beyond 32, so LQ=48/64 configurations are not modelled. Predicted
     values are not sign/zero-extended for `lb`/`lh`/`lw`, because the access size
@@ -549,7 +568,7 @@ Third-party pins: Monocypher `f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe`
 | claim | evidence | artifact | limitation |
 |---|---|---|---|
 | F1 structural conformance | paper-confirmed allocation/base rule, audited model, 117 checks | layers 1–6; `PAPER_NOTES.md` | trace-presence, no co-sim; optional EVES early population absent; PRF port pressure not modelled (+3/+2 latency is) |
-| F2 behavioural smoke test | 27.11 % 5-benchmark coverage, 98.85 % accuracy | `spec_coverage/` + `spec_f2.csv` | first 30 M from `_start`, no warm-up; **not** comparable to the paper's steady state |
+| F2 behavioural smoke test | 26.84 % 5-benchmark coverage, 98.82 % accuracy | `spec_coverage/` + `spec_f2.csv` | first 30 M from `_start`, no warm-up; **not** comparable to the paper's steady state |
 | A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 is crafted-victim only |
 | A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; Mode 2 off is `known=00` |
 | A3 opportunity | `d` table + margin | `prevalence/` | precondition only; controls synthetic; build-specific |
@@ -576,7 +595,7 @@ experiment is deferred (out of scope for this revision).
 modelled safely (R3); prefetch/zero-destination loads are skipped (R4); cold-key
 and varying-guess controls are measured (R5/R6); Mode 2's `flush_drain` restores
 a clean `known=00` off control (R7); and F2 is scoped as a startup smoke test,
-with the 22.9 % three-benchmark comparison withdrawn (`505.mcf`'s 64.51 % is
+with the 22.9 % three-benchmark comparison withdrawn (`505.mcf`'s 64.48 % is
 startup) (R8). Remaining limitations are
 subword extension, LQ>32, no co-simulation, no hardware, and the deferred
 defence run. Full mapping: `REVIEW_RESPONSE_independent.md`.
