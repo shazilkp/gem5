@@ -1,0 +1,29 @@
+# Vendored upstream corpus: keep the whole clone (including its .git) out of the
+# repository so it can never be committed as a nested repository.
+third_party/Monocypher/
+
+# Build products: object files, target binaries, objdump dumps, metadata.
+build/
+*.o
+*.a
+
+# Raw traces (the pipeline streams QEMU output and never writes these, but keep
+# them ignored in case someone redirects a trace by hand).
+*.trace
+*.trace.gz
+results/*.trace
+results/traces/
+
+# Compiled target binaries, if someone builds them in place.
+targets/t_verify32
+targets/t_chacha20
+targets/t_blake2b
+targets/t_aead
+targets/t_memcmp
+targets/t_strcmp
+targets/t_hashlookup
+targets/t_listwalk
+
+# Editor/OS noise.
+*.swp
+.DS_Store
