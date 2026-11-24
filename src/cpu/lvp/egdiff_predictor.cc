@@ -26,13 +26,23 @@ EgDiffPredictor::EgDiffPredictor(unsigned tableEntries, unsigned seed,
 }
 
 EgDiffCommitResult
-EgDiffPredictor::commitLoad(Addr pc, RegVal actualVal)
+EgDiffPredictor::commitLoad(Addr pc, uint64_t seqNum, RegVal actualVal)
 {
     EgDiffCommitResult r;
 
     const unsigned idx = indexHash(pc);
     const uint16_t t = tagHash(pc);
     EgDiffTableEntry &e = table[idx];
+
+    // Use the distance/diff captured in this load's speculative-queue entry at
+    // dispatch.  The live table entry may already have been updated by an
+    // earlier instance of the same PC; the paper's Algorithm 1 compares against
+    // the stride stored in the value-queue entry (Section III-A, Table I).
+    auto qit = std::find_if(specGVQ.begin(), specGVQ.end(),
+                            [seqNum](const EgDiffSpecEntry &x) {
+                                return x.seqNum == seqNum;
+                            });
+    const bool haveSnapshot = (qit != specGVQ.end() && qit->snapshot);
 
     // ---- 10-bit TICK usefulness decay (Section III-B) ----
     if (++tickCounter >= TICK_PERIOD) {
@@ -48,8 +58,8 @@ EgDiffPredictor::commitLoad(Addr pc, RegVal actualVal)
         // ---------------- Algorithm 1: Distance Polling ----------------
         r.tagMatched = true;
 
-        const uint8_t d = e.distance;               // in [1, 32]
-        const uint64_t delta_p = e.diff;
+        const uint8_t d = haveSnapshot ? qit->distance : e.distance;
+        const uint64_t delta_p = haveSnapshot ? qit->diff : e.diff;
         const uint64_t nvq_d = nvq[d - 1];
         const uint64_t delta_a = actualVal - nvq_d;
 
@@ -132,6 +142,7 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
         return res;
 
     const EgDiffTableEntry &e = table[indexHash(pc)];
+    const bool tagMatch = (e.tag == tagHash(pc));
 
     EgDiffSpecEntry q;
     q.seqNum = seqNum;
@@ -140,11 +151,18 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
 
     const size_t curIdx = specGVQ.size();
 
-    if (!predictionSuppressed(seqNum) && e.tag == tagHash(pc) &&
-        e.ctr == MAXCONF) {
-        const uint8_t d = e.distance;
-        q.distance = d;
+    if (!predictionSuppressed(seqNum) && tagMatch && e.ctr == MAXCONF) {
+        // Section III-A / Table I: a predicted load carries the distance and
+        // diff that were in force at dispatch.  Commit must use this snapshot,
+        // not the live table entry, because an earlier instance of the same PC
+        // may commit and mutate the table while this load is in flight.
+        // Unpredicted loads keep using the live table for training; using a
+        // stale snapshot there starves confidence growth.
+        q.distance = e.distance;
         q.diff = e.diff;
+        q.snapshot = true;
+
+        const uint8_t d = q.distance;
 
         bool haveBase = false;
         uint64_t baseVal = 0;

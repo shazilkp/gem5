@@ -61,6 +61,7 @@ struct EgDiffSpecEntry
     uint64_t diff = 0;      // 64-bit diff used for this prediction
     bool vp = false;        // a valid prediction has been written
     bool pending = false;   // predicted value not yet published to the PRF
+    bool snapshot = false;  // distance/diff captured at dispatch (tag match)
     bool misp = false;      // verification detected a mismatch
     bool avail = false;     // the actual load has completed in the LQ
     uint64_t wakeSeqNum = 0;// 0 = unbound; else seqNum of deferred dependent
@@ -149,7 +150,7 @@ class EgDiffPredictor
      * pushes the committed value into the NVQ.  This is the only place the
      * Prediction Table is ever written.
      */
-    EgDiffCommitResult commitLoad(Addr pc, RegVal actualVal);
+    EgDiffCommitResult commitLoad(Addr pc, uint64_t seqNum, RegVal actualVal);
 
     const EgDiffTableEntry &entry(Addr pc) const
     {

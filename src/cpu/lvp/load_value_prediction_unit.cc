@@ -276,7 +276,7 @@ LoadValuePredictionUnit::commitLoad(uint64_t seqNum, Addr instPC,
         ++stats.egdiffCommittedPredicted;
 
     const EgDiffCommitResult r =
-        egdiffPredictor->commitLoad(instPC, actualVal);
+        egdiffPredictor->commitLoad(instPC, seqNum, actualVal);
 
     ++stats.egdiffCommits;
     if (r.allocated)
