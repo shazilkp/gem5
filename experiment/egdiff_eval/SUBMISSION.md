@@ -19,11 +19,11 @@ value be forwarded into another instruction's register across a software
 boundary?
 
 We answer yes, with a functionally audited model, 117 automated conformance
-checks, end-to-end demonstrations on crafted victims and on real Monocypher code
-(`crypto_verify32`, one 8-byte key word) and on the zero-length SipHash-2-4
-path, clean same-binary negative controls, a behavioural ballpark check on SPEC
-CPU2017, and a measurement of how often the required code shape occurs in real
-functions. The attack needs **no mispredicted branch and no gadget in the
+checks, end-to-end demonstrations on crafted victims, a paper-faithful
+speculative-queue recovery of one 8-byte Monocypher `crypto_verify32` key word,
+and an NVQ-extension recovery of the zero-length SipHash-2-4 key. We include
+same-binary negative controls, a behavioural smoke test on SPEC CPU2017, and a
+measurement of how often the required code shape occurs in real functions. The attack needs **no mispredicted branch and no gadget in the
 victim**, and **no predictor-table collision**. The distinguishing property is
 the **untagged global value queue**: it removes both the table collision
 (needed by Deng & Szefer) and the victim gadget (needed by FLOP). We are not
@@ -231,8 +231,9 @@ case the common path is base-available (NVQ), not the deferred path. A
 `COLD_KEY=1` variant removes those calls, and a `VARY_GUESS=1` variant changes
 the guess on every attempt. **Both cold and variable-input variants still
 recover 8/8** in this model, and cold SipHash still recovers 16/16
-(`RESULTS_target_controls.md`). The real-target mechanism is therefore
-**GVQ/NVQ forwarding**, not exclusively in-flight `SpecGVQ`. The warm-up is
+(`RESULTS_target_controls.md`). A4 is therefore **paper-faithful SpecGVQ** with the NVQ-base extension off;
+SipHash is an **NVQ-extension** result because strict SpecGVQ fails 0/16. The
+warm-up is
 disclosed but not required in these runs.
 
 **Distance map.** `d` is a property of the compiled binary (compiler, flags,
@@ -336,22 +337,24 @@ state dependent).
 |---|---|---|
 | Mode 1 (`SpecGVQ`, crafted victim) | 64-bit value recovered (5/5 secrets) | off/FLOP: NO-MATCH, 0 |
 | Mode 2 (`NVQ` capture + replay, fenced victim) | 64-bit value recovered | off: `known=00`, `NO-MATCH`; FLOP: emits its own constant 0 (`known=ff`), `NO-MATCH` |
-| SipHash-2-4, empty message | 16/16 key bytes, `d = 5, 6` | off/FLOP: 0/16 correct |
-| Monocypher `crypto_verify32` | 8/8 bytes of `key[24..31]`, `d = 7…14`, 16 votes/lane | off/FLOP: 0/8 |
+| SipHash-2-4, empty message | 16/16 key bytes, `d = 5, 6`; **NVQ extension** | off/FLOP: 0/16 correct |
+| Monocypher `crypto_verify32` | 8/8 bytes of `key[24..31]`, `d = 7…14`; **strict SpecGVQ** (`EGDIFF_NVQ_BASE=0`) | off/FLOP: 0/8 |
 
 In A4 the gem5 trace shows, for each key byte, 16 predictions whose `base_val` is
-that byte (18 for `0x10`; the extra two are not filtered by dependent PC). In
-the recorded A4 and SipHash runs, **every victim-phase base was NVQ**
-(`base_pc = 0`): the key load had committed before the marker dispatched, so
-the real-target evidence exercises the non-speculative segment, not the
-speculative queue that the paper describes as the prediction path. That NVQ-base
-path is our transcribed Rule C extension, not an explicit paper prediction path;
-the real-target results are therefore not a paper-faithful `SpecGVQ`
-demonstration. The crafted Mode 1/2 experiments are the speculative-queue
-evidence. The baseline harness
-warms the key line before the measured lane; a `COLD_KEY=1` variant removes the
-warm-up calls and still recovers 8/8, so the mechanism is GVQ/NVQ forwarding,
-not exclusively in-flight `SpecGVQ`. A one-call `memcmp` probe gives
+that byte (18 for `0x10`; the extra two are not filtered by dependent PC).
+**With the NVQ-base extension disabled (`EGDIFF_NVQ_BASE=0`), A4 still recovers
+8/8, `egdiffNVQBases=0`, and every normal prediction reports `base=specgvq` with
+a nonzero `base_pc` naming the key-load PC (e.g. `0x10cce`).** This is the
+paper-faithful speculative-queue result; the strict Layer-6 gate passes 36/36 at
+12 divisions, and the 1- and 4-division variants also recover (2 divisions is a
+measurement false negative). A4 with the default NVQ-base extension also
+recovers, but the paper-faithful claim does not need it.
+
+SipHash is different: with `EGDIFF_NVQ_BASE=0` it fails **0/16** at 1, 2, 4, and
+12 divisions, and 0/16 with `COLD_KEY=1`. Its original 16/16 result is therefore
+an **NVQ-extension** result, not a paper-faithful speculative-queue attack. The
+crafted Mode 1 is SpecGVQ; Mode 2 uses the paper's NVQ update path. A one-call
+`memcmp` probe gives
 architectural `d = 1` and dispatch `d = 1` for both the equal and early-exit
 cases; it has no branch between the last compared byte and the return, so it
 does not exercise the wrong-path risk. A4's earliest byte is `d = 14` (margin
@@ -452,9 +455,10 @@ register-level forwarding would remain.
    why it needs 16,800 victim calls rather than a branch-shadow replay. Its
    fence is a harness ordering device: gem5's `FENCE.I` drain is not a RISC-V
    data fence.
-6. **Layer 5 estimator is weak.** `REPS = 5`, fixed 20-cycle margin, bare
-   majority, no vote floor. It produced 0/16 in both controls, but one lucky
-   attempt could decide a byte.
+6. **Layer 5 is an NVQ-extension result.** Its estimator is weak (`REPS = 5`,
+   fixed 20-cycle margin, bare majority, no vote floor), and strict SpecGVQ
+   fails 0/16. It is useful as an extension control, not as a paper-faithful
+   SpecGVQ demonstration.
 7. **No single estimator across harnesses.** Mode 1/A4 use calibrated,
    vote-floor, 2×-margin, known-mask rules; Mode 2 and Layer 5 do not. §5's
    description is per-harness, not one design.
@@ -462,10 +466,12 @@ register-level forwarding would remain.
    hand-written controls, one function per library. The fault probe
    over-approximates; min-over-PCs is optimistic for lookup/walk; the three modes
    replay 300 inputs and are not independent samples.
-9. **Narrow real targets.** A4 demonstrates one key word; both warm and cold
-   key-line variants recover it, but the full 32-byte key is not recovered.
-   SipHash is empty-message only; cold and warm variants both recover 16/16.
-   `memcmp`/`strcmp`/hash/list are precondition measurements, not attacks.
+9. **Narrow real targets.** A4 demonstrates one key word and is paper-faithful
+   SpecGVQ when `EGDIFF_NVQ_BASE=0`; warm/cold variants with the NVQ extension
+   also recover it. The full 32-byte key is not recovered. SipHash is
+   empty-message only; its 16/16 recovery requires the NVQ extension (strict
+   SpecGVQ fails 0/16). `memcmp`/`strcmp`/hash/list are precondition
+   measurements, not attacks.
 10. **Build sensitivity.** `d` depends on compiler, flags and library version.
     A3 is a property of these binaries, not of the source functions.
 11. **Victim and attacker prediction behaviour is assumed.** The victim's
@@ -572,7 +578,7 @@ Third-party pins: Monocypher `f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe`
 | A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 is crafted-victim only |
 | A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; Mode 2 off is `known=00` |
 | A3 opportunity | `d` table + margin | `prevalence/` | precondition only; controls synthetic; build-specific |
-| A4 real-target forwarding | 8/8 bytes of `key[24..31]` at `d = 7…14`; cold and varying-guess variants | `run_layer6.sh`, `RESULTS_target_controls.md` | one word; branchless; GVQ/NVQ, not pure in-flight |
+| A4 real-target forwarding | 8/8 bytes of `key[24..31]` at `d = 7…14`; strict `EGDIFF_NVQ_BASE=0` uses `specgvq`, zero NVQ bases | `run_layer6.sh`, `RESULTS_target_controls.md` | one word; branchless; SipHash is NVQ-extension only |
 | F3 performance | — | — | **out of scope** |
 
 ## Appendix C — Round-1 review outcome

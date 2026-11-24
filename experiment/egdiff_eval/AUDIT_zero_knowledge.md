@@ -579,3 +579,27 @@ Artifacts left in `/tmp/opencode/`: `zk_layer{1..6}.log`, `zk_out/*`,
 new-key and no-victim controls), `zk_bins/`. All large traces were deleted.
 No repository file was modified; the test binaries produced by the gate scripts
 are git-ignored build outputs.
+
+---
+
+## Post-audit addendum (authors)
+
+After the audit, we added `egdiffNvqBase`, default on, and reran the real targets
+with it **off** (`EGDIFF_NVQ_BASE=0`). This tests the paper-faithful
+speculative-queue path only.
+
+- **A4:** still recovers 8/8 at 1, 4, and 12 divisions, with
+  `egdiffNVQBases=0`, `base=specgvq`, and nonzero `base_pc` (e.g. `0x10cce`).
+  The strict Layer-6 gate passes 36/36. The 2-division run is a measurement
+  false negative. The audit's “every base NVQ” observation is correct for the
+  default model with the extension on, but A4 has a paper-faithful SpecGVQ
+  result when it is off.
+- **SipHash:** strict SpecGVQ fails 0/16 at 1, 2, 4, and 12 divisions, and
+  0/16 with `COLD_KEY=1`. Its 16/16 result is therefore an NVQ-extension
+  result, not a paper-faithful SpecGVQ one.
+- **Crafted Mode 1:** strict SpecGVQ 8/8 at 1 and 12 divisions, `egdiffNVQBases=0`.
+- **Mode 2:** unchanged; it uses the paper's NVQ update/capture path.
+
+The paper draft and submission now classify A4 as paper-faithful SpecGVQ and
+SipHash as an NVQ-extension result. The A4 gate defaults to
+`EGDIFF_NVQ_BASE=0`; Layer 5 explicitly sets it to 1.

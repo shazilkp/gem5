@@ -40,6 +40,31 @@ constant input” objection, not the broader external-validity question.
 The cold variant still recovers both key words.  The empty-message path and the
 one-call-per-byte structure remain limitations.
 
+## Strict SpecGVQ test (`EGDIFF_NVQ_BASE=0`)
+
+The paper's prediction text uses the speculative queue; the NVQ is described for
+commit-time updates.  The model has a default-on `egdiffNvqBase` switch for the
+Rule C extension.  With it **off**, the base must still be in `SpecGVQ`.
+
+| target | marker delay | result | NVQ bases |
+|---|---|---|---|
+| A4 `crypto_verify32` | 1 division | **MATCH, 8/8** | 0 |
+| A4 `crypto_verify32` | 2 divisions | NO-MATCH (`known=00`) | 0 |
+| A4 `crypto_verify32` | 4 divisions | **MATCH, 8/8** | 0 |
+| A4 `crypto_verify32` | 12 divisions | **MATCH, 8/8** | 0 |
+| SipHash | 1, 2, 4, 12 divisions | NO-MATCH, 0/16 | 0 |
+| SipHash cold | 1, 12 divisions | NO-MATCH, 0/16 | 0 |
+| crafted Mode 1 | 1, 12 divisions | **MATCH, 8/8** | 0 |
+
+The A4 strict trace reports `base=specgvq` and a nonzero `base_pc` (e.g.
+`0x10cce`); `egdiffNVQBases=0`.  The 2-division A4 row is a measurement false
+negative (no informative attempts), not a mechanism failure.  SipHash has no
+strict-SpecGVQ success in these runs: its original 16/16 result depends on the
+NVQ-base extension.
+
+`run_layer6.sh` now defaults to `EGDIFF_NVQ_BASE=0` and passes 36/36 with zero
+NVQ bases.  `run_layer5.sh` remains the NVQ-base extension result.
+
 ## Independent audit additions
 
 The zero-knowledge audit rebuilt A4 with a **different key word**

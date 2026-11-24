@@ -34,6 +34,9 @@ PYTHON="${PYTHON:-python3}"
 MONO="${MONO:-experiment/egdiff_eval/prevalence/third_party/Monocypher/src}"
 D=tests/test-progs/egdiff_attack
 BIN="$D/poc_verify32"
+# The paper's prediction text uses the speculative queue.  The A4 gate is
+# strict by default (no NVQ base); set EGDIFF_NVQ_BASE=1 for the extension.
+NVQ_BASE="${EGDIFF_NVQ_BASE:-0}"
 
 [ -x "$GEM5" ] || { echo "missing gem5: $GEM5"; exit 1; }
 [ -f "$MONO/monocypher.c" ] || { echo "missing Monocypher: $MONO"; exit 1; }
@@ -152,7 +155,7 @@ run_case() { # run_case <tag> <type> <enabled>
     local tag="$1" type="$2" on="$3"
     local out="$WORK/$tag"
     rm -rf "$out"; mkdir -p "$out"
-    EGDIFF_TYPE="$type" EGDIFF_ON="$on" \
+    EGDIFF_TYPE="$type" EGDIFF_ON="$on" EGDIFF_NVQ_BASE="$NVQ_BASE" \
     timeout 1800 "$GEM5" -d "$out" \
         configs/example/egdiff.py --cpu-type=O3CPU --caches \
         --cmd="$PWD/$BIN" --options="attack $SPEC" > "$out/stdout" 2>&1 || true

@@ -7,10 +7,10 @@ are stated limitations, not hidden claims.
 | # | disposition | fix / evidence |
 |---|---|---|
 | R1 | fixed | `commitLoad` uses the `SpecGVQ` distance/diff snapshot captured when a load **predicts** (tag match, `ctr==7`); unpredicted training loads keep the live table. Commit `6e6fcd4d8d`. |
-| R2 | fixed | lastMisp is a 1024 **correctly-dispatched instruction** countdown armed at the squash, not `fetchSeqNum+1024`. Suppression stat counts only would-predict loads. Commit `5a81c3ed1b`. |
+| R2 | fixed (approximation) | lastMisp is a 1024 **instruction-dispatched-after-the-squash** countdown, not `fetchSeqNum+1024`; later wrong-path instructions can still consume slots before their own squash. Suppression stat counts only would-predict loads. Commit `5a81c3ed1b`. |
 | R3 | fixed | normal `+3` is modelled with a pending-publish stage: `DynInst` pending flag, IQ marks ready only when `lvpPredictionAvailable()`, IEW pending map serviced in `tick()`, cancel on commit/squash. Deferred `+2` publishes through the same stage. Commit `c301573861`. |
 | R4 | fixed (prefetch) + scoped | zero-destination/prefetch-like loads are skipped in dispatch/completion/commit; LQ=32 is explicit; subword sign/zero extension is a stated gap. Commit `0c406768a3`. |
-| R5 | measured + retitled | cold A4 (no selfcheck/two warm-up calls) still recovers 8/8; cold SipHash still 16/16. The claim is retitled **GVQ/NVQ forwarding**, not pure in-flight `SpecGVQ`. Commit `59d3bc9056`. |
+| R5 | measured + split | strict A4 (`EGDIFF_NVQ_BASE=0`) recovers 8/8 with `egdiffNVQBases=0` and `base=specgvq`; strict SipHash fails 0/16, so its 16/16 is an **NVQ-extension** result. The main A4 claim is paper-faithful; SipHash is extension-only. |
 | R6 | measured | varying the guess on every A4 attempt still recovers 8/8; the shared `load64_le` PC does not lock. The narrow-target/ABI limitations remain. Commit `59d3bc9056`. |
 | R7 | fixed | Mode 2 was missing `flush_drain()` after `flush_l1()`; with it the off control is `known=00`, FLOP emits its own 0 (`known=ff`, `NO-MATCH`), and the gate requires both. The §5/§9.5 contradiction is removed. Commit `5f8d69d4be`. |
 | R8 | corrected claim | F2 is a first-30M-from-`_start` **smoke test**, not conformance. `505.mcf`'s 64.51% is startup; the paper's Fig. 10(b) is <10%. The 22.9% cherry-pick is withdrawn; deepsjeng is reported; config deviations are stated. Commit `b967ed66d4`. |
