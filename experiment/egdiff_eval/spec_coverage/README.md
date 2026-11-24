@@ -112,7 +112,29 @@ earlier "excluding mcf gives 22.9%" reading is withdrawn. All five attempted
 benchmarks are reported; the excluded set is `519.lbm`, `503.bwaves` and
 `557.xz`, with the reasons above.
 
-The configuration also differs from the paper's Table II: TournamentBP instead
+## Paper-config sensitivity (still 30M startup)
+
+`EGDIFF_PAPER_CONFIG=1` sets the core/cache shape of the paper's Table II:
+4 GHz, 32 KiB 4-way L1I/L1D, 256 KiB 8-way L2, 2 MiB 16-way L3, degree-4
+stride prefetcher, L-TAGE, 168/168 registers, ROB/IQ/LQ/SQ 192/64/32/32,
+8-wide fetch/issue/commit.  It is still RISC-V and still a first-30M-from-
+`_start` window, so it is a **configuration sensitivity check**, not a
+SimPoint reproduction.
+
+| benchmark | committed loads | coverage | accuracy |
+|---|---|---|---|
+| 505.mcf | 6,426,346 | 64.11% | 99.99% |
+| 544.nab | 5,527,141 | 27.39% | 99.48% |
+| 548.exchange2 | 4,951,309 | 17.13% | 99.33% |
+| 510.parest | 5,161,173 | 22.64% | 99.80% |
+| 531.deepsjeng | 22,357 | 2.23% | 95.23% |
+| **mean (5, unweighted)** | | **26.70%** | **98.77%** |
+
+Raw rows: `spec_f2_paper.csv`.  The default (TournamentBP, 2 GHz, 64K/2-way
+L1D, no L2/L3) run above gives 26.84%/98.82%; the paper-config result is
+slightly lower, and neither is comparable to the paper's steady-state bars.
+
+The default configuration also differs from the paper's Table II: TournamentBP instead
 of L-TAGE, 256/256 physical registers instead of 168/168, no L3 or stride
 prefetcher, and 0-cycle predictor latency in these SPEC runs.
 

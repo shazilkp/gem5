@@ -23,7 +23,10 @@ _CONFIGS = os.path.normpath(os.path.join(_HERE, ".."))
 sys.path.insert(0, _CONFIGS)
 
 from common import CacheConfig  # noqa: E402
+from m5.objects import StridePrefetcher  # noqa: E402
 
+PAPER_CONFIG = os.environ.get("EGDIFF_PAPER_CONFIG", "0") not in (
+    "0", "false", "no")
 PRED_TYPE = os.environ.get("EGDIFF_TYPE", "egdiff")
 PRED_ON = os.environ.get("EGDIFF_ON", "1") not in ("0", "false", "no")
 TABLE = int(os.environ.get("EGDIFF_TABLE", "4096"))
@@ -38,7 +41,58 @@ _real_config_cache = CacheConfig.config_cache
 
 
 def _egdiff_config_cache(options, system):
+    if PAPER_CONFIG:
+        # ISCA 2026 Table II.  The ISA remains RISC-V (the paper uses ARMv8);
+        # the SPEC window remains 30M from _start (the paper uses SimPoints).
+        options.l3cache = True
+        options.l1i_size = "32KiB"
+        options.l1i_assoc = 4
+        options.l1d_size = "32KiB"
+        options.l1d_assoc = 4
+        options.l2_size = "256KiB"
+        options.l2_assoc = 8
+        options.l3_size = "2MiB"
+        options.l3_assoc = 16
+        options.bp_type = "LTAGE"
+
     _real_config_cache(options, system)
+
+    if PAPER_CONFIG:
+        system.cpu_clk_domain.clock = "4GHz"
+        system.clk_domain.clock = "4GHz"
+        for cpu in system.cpu:
+            cpu.fetchWidth = 8
+            cpu.decodeWidth = 8
+            cpu.dispatchWidth = 8
+            cpu.issueWidth = 8
+            cpu.commitWidth = 8
+            cpu.wbWidth = 8
+            cpu.numPhysIntRegs = 168
+            cpu.numPhysFloatRegs = 168
+            cpu.numROBEntries = 192
+            for iq in cpu.instQueues:
+                iq.numEntries = 64
+            cpu.LQEntries = 32
+            cpu.SQEntries = 32
+            if cpu.dcache:
+                cpu.dcache.tag_latency = 1
+                cpu.dcache.data_latency = 1
+                cpu.dcache.response_latency = 1
+                cpu.dcache.prefetcher = StridePrefetcher(degree=4)
+            if cpu.icache:
+                cpu.icache.tag_latency = 1
+                cpu.icache.data_latency = 1
+                cpu.icache.response_latency = 0
+        if getattr(system, "l2", None):
+            system.l2.tag_latency = 4
+            system.l2.data_latency = 4
+            system.l2.response_latency = 4
+        if getattr(system, "l3", None):
+            system.l3.tag_latency = 11
+            system.l3.data_latency = 10
+            system.l3.response_latency = 11
+        print("[egdiff] PAPER_CONFIG: 4GHz, L1 32K/4-way, L2 256K/8-way, "
+              "L3 2M/16-way, L-TAGE, 168 regs, ROB/IQ/LQ/SQ 192/64/32/32")
 
     for cpu in system.cpu:
         lvp = cpu.loadValuePredictor
