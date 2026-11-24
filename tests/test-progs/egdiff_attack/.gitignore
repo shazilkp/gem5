@@ -1,8 +1,10 @@
 # Build outputs produced by run_layer*.sh (compiled RISC-V test binaries).
 # The sources (.c) and drivers (.sh) are tracked.
 poc_v1_specgvq_1shot
+poc_v1_specgvq_1shot.0x*
 poc_v2_nvq_fence_bypass
 test_layer1_polling
 test_layer2_branch_squash
 test_layer2_spec_and_squash
 test_layer3_deferred_wake
+siphash_attack
