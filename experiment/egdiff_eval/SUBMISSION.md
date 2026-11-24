@@ -1,7 +1,8 @@
-# SUBMISSION (revision 2) — Cross-Instruction Value Forwarding in a Global Load-Value Predictor
+# SUBMISSION (revision 3) — Cross-Instruction Value Forwarding in a Global Load-Value Predictor
 
-*Artifact-style write-up for simulated peer review. Revision 2 incorporates the
-round-1 reviews in `REVIEWS_round1.md`; every change and its disposition is in
+*Artifact-style write-up for simulated peer review. Revision 3 incorporates the
+round-1 reviews in `REVIEWS_round1.md` and the independent eight-refutal audit
+(`REVIEW_RESPONSE_independent.md`); round-1 dispositions are in
 `REVIEW_RESPONSE.md`. Everything below is reproducible from this repository
 except the two third-party inputs named in Appendix A.*
 
@@ -33,8 +34,9 @@ of those attacks.
 **Scope statement.** This is a functional, design-level security analysis under
 a source-level non-disclosure convention (a sandbox/JIT-like "the attacker's
 code cannot name the secret", **not** an MMU boundary). It makes no
-predictor-latency or IPC claim; the cache-probe *timing* used to observe the
-leak **is** modelled by gem5. It makes no privilege or cross-process claim. The
+IPC/performance claim; the predictor's **+3 normal / +2 deferred latency** and
+the cache-probe *timing* used to observe the leak **are** modelled by gem5. It
+makes no privilege or cross-process claim. The
 cache exfiltration is demonstrated on an undefended hierarchy: SafeSpec and
 Delay-on-Miss are **not evaluated** and are expected to block the observation
 while leaving the register-level forwarding intact.
@@ -98,12 +100,14 @@ EVES, versus 3.24 % / 26.15 % with it), and earlier base values can only help an
 attacker. The omission is therefore conservative for the attack, not
 exculpatory.
 
-**Timing.** Predictor latency (3 cycles normal, +2 deferred) and the PRF-write
-elision are not modelled; this is a performance omission. Cache timing *is*
-modelled, because the observable is a cache-probe hit/miss. Mode 1 additionally
-assumes the forwarded probe reaches the cache before the mispredicting load
-squashes; the address delay (12 register-only divisions) is chosen to make that
-margin large, but the margin is not measured cycle-by-cycle (§9).
+**Timing.** The predictor's **+3 normal** and **+2 deferred** latency are
+modelled with a pending-publish stage (IQ ready gating, `IEW` pending map,
+cancel on commit/squash). PRF port pressure and write elision are not modelled;
+that is the remaining performance omission. Cache timing *is* modelled, because
+the observable is a cache-probe hit/miss. The Mode 1 address-delay sweep shows
+the attack fails at 0 divisions and recovers at 1; the cycle trace gives a
+probe-request-to-verification margin of 54–185 cycles at 1 division (avg 62) and
+115–331 at 12 (avg 197).
 
 Other deviations: the PC hashes use `pc >> 1` (the illustrative `pc >> 2`
 aliases two loads in one 4-byte word on RISC-V with compressed instructions);
@@ -138,9 +142,9 @@ every candidate and fills from execution).
   the squash is a gem5-modelled property (the value-misprediction squash reuses
   gem5's `squashDueToMemOrder`, whose MSHR/load handling determines survival),
   and real cores may differ.
-- **Out of scope:** privilege escalation, cross-process leakage, predictor
-  latency/IPC, real hardware, timing channels beyond the cache probe, and
-  sandbox instantiation.
+- **Out of scope:** privilege escalation, cross-process leakage, IPC/performance,
+  real hardware, timing channels beyond the cache probe, and sandbox
+  instantiation.
 
 ## 4. Implementation and conformance
 
@@ -334,8 +338,10 @@ In A4 the gem5 trace shows, for each key byte, 16 predictions whose `base_val` i
 that byte (18 for `0x10`; the extra two are not filtered by dependent PC); when
 the base was still speculative, `base_pc` is the key-load PC (`0x10f58 = lbu
 a5,0(a0)`, `0x10f7e = lbu a0,7(a0)`), and when it had committed, `base_pc = 0`
-(the NVQ stores values, not PCs). The key line is warmed before the measured
-lane (§5), so most wins are NVQ-sourced. A one-call `memcmp` probe gives
+(the NVQ stores values, not PCs). The baseline harness warms the key line before
+the measured lane, so most wins are NVQ-sourced; a `COLD_KEY=1` variant removes
+the warm-up calls and still recovers 8/8, so the mechanism is GVQ/NVQ forwarding,
+not exclusively in-flight `SpecGVQ`. A one-call `memcmp` probe gives
 architectural `d = 1` and dispatch `d = 1` for both the equal and early-exit
 cases; it has no branch between the last compared byte and the return, so it
 does not exercise the wrong-path risk. A4's earliest byte is `d = 14` (margin
@@ -542,11 +548,11 @@ Third-party pins: Monocypher `f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe`
 | claim | evidence | artifact | limitation |
 |---|---|---|---|
 | F1 structural conformance | paper-confirmed allocation/base rule, audited model, 117 checks | layers 1–6; `PAPER_NOTES.md` | trace-presence, no co-sim; optional EVES early population absent; PRF port pressure not modelled (+3/+2 latency is) |
-| F2 behavioural ballpark | 22.9 % (3-bench) / 33.3 % (4) coverage, >99 % accuracy | `spec_coverage/` + `spec_f2.csv` | short window, ISA differs, unweighted, exclusions |
-| A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 estimator weak |
-| A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; controls are same-binary |
+| F2 behavioural smoke test | 27.11 % 5-benchmark coverage, 98.85 % accuracy | `spec_coverage/` + `spec_f2.csv` | first 30 M from `_start`, no warm-up; **not** comparable to the paper's steady state |
+| A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 is crafted-victim only |
+| A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; Mode 2 off is `known=00` |
 | A3 opportunity | `d` table + margin | `prevalence/` | precondition only; controls synthetic; build-specific |
-| A4 real-target forwarding | 8/8 bytes of `key[24..31]` at `d = 7…14` | `run_layer6.sh` | one word; warmed key; branchless |
+| A4 real-target forwarding | 8/8 bytes of `key[24..31]` at `d = 7…14`; cold and varying-guess variants | `run_layer6.sh`, `RESULTS_target_controls.md` | one word; branchless; GVQ/NVQ, not pure in-flight |
 | F3 performance | — | — | **out of scope** |
 
 ## Appendix C — Round-1 review outcome
@@ -561,13 +567,21 @@ Consensus: the mechanism (A1) and the real-target demonstrations are credible an
 well controlled; the threat model is a non-disclosure convention rather than a
 sandbox, F2 is a ballpark rather than conformance, A3 is a precondition result,
 the Mode 2/Layer 5 estimators are weaker than Mode 1/A4, and the defence
-experiment is deferred (out of scope for this revision). Revision 2 fixes the
-in-text overclaims and resolves the load-bearing EVES objection with the paper's
-unconditional-allocation sentence; the only model omission is the optional
-EVES-assisted early population. Remaining open items: a variable-data victim, a
-common estimator, and the Mode 1 race measurement. Full reviews:
-`REVIEWS_round1.md`; dispositions: `REVIEW_RESPONSE.md`; paper quotes:
-`PAPER_NOTES.md`.
+experiment is deferred (out of scope for this revision).
+
+**Independent audit (R1–R8).** A second audit found eight refutals. Revisions
+2–3 fix the load-bearing ones: commit polling uses the queue snapshot (R1);
+`lastMisp` counts correctly-dispatched instructions (R2); the `+3/+2` latency is
+modelled safely (R3); prefetch/zero-destination loads are skipped (R4); cold-key
+and varying-guess controls are measured (R5/R6); Mode 2's `flush_drain` restores
+a clean `known=00` off control (R7); and F2 is scoped as a startup smoke test,
+with the 22.9 % three-benchmark comparison withdrawn (`505.mcf`'s 64.51 % is
+startup) (R8). Remaining limitations are
+subword extension, LQ>32, no co-simulation, no hardware, and the deferred
+defence run. Full mapping: `REVIEW_RESPONSE_independent.md`.
+
+Full round-1 reviews: `REVIEWS_round1.md`; dispositions: `REVIEW_RESPONSE.md`;
+paper quotes: `PAPER_NOTES.md`.
 
 ## Reviewer packet (round 2)
 
