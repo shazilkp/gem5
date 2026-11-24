@@ -344,8 +344,8 @@ Two further controls separate the observable from the recovery path
 (`RESULTS_races.md`). An address-delay sweep shows the Mode 1 attack fails at
 **0** register-only divisions and recovers all 8 bytes at **1**, so the race is
 real and the 12-division PoC value is conservative. The cycle trace puts the
-probe's cache request **108–370 cycles** before verification at 1 division
-(avg 124) and **230–662 cycles** at 12 (avg 394); a 3–5 cycle probe-issue delay
+probe's cache request **54–185 cycles** before verification at 1 division
+(avg 62) and **115–331 cycles** at 12 (avg 197); a 3–5 cycle probe-issue delay
 (proxy for predictor latency) still recovers. A branch-squash control
 (`EGDIFF_ON=0`) leaves the probe line at **16** cycles after a branch
 misprediction versus **116** in the untouched-line null, so the fill survives a
@@ -384,8 +384,8 @@ register-level forwarding would remain.
    probe-issue delay proxy: 3 and 5 dependent instructions still recover all 8
    bytes. Cache-probe timing *is* modelled. Mode 1's address-delay sweep shows
    the attack fails at 0 divisions and recovers at **1**; the cycle trace gives a
-   probe-request-to-verification margin of **108–370 cycles** at 1 division
-   (avg 124) and **230–662 cycles** at 12 (avg 394), so 3–5 cycles is well inside
+   probe-request-to-verification margin of **54–185 cycles** at 1 division
+   (avg 62) and **115–331 cycles** at 12 (avg 197), so 3–5 cycles is well inside
    the window. A branch-squash control (`squash` line 16 cycles vs `none` 116)
    shows the fill survives a branch misprediction as well, so survival is a
    general cache property, not a `squashDueToMemOrder` artifact. The observation

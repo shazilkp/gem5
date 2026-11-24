@@ -23,7 +23,7 @@ before the squash, and the squash.  It reports the margin in cycles:
 
 Usage:
     measure_race_margin.py --log simout --probe-base 0x... --probe-size 16384
-                           [--ticks-per-cycle 250]
+                           [--ticks-per-cycle 500]
 """
 
 import argparse
@@ -52,7 +52,9 @@ def main():
     ap.add_argument("--log", required=True)
     ap.add_argument("--probe-base", required=True, type=lambda x: int(x, 0))
     ap.add_argument("--probe-size", type=lambda x: int(x, 0), default=16384)
-    ap.add_argument("--ticks-per-cycle", type=int, default=250)
+    # This configuration is 2 GHz: 500 ticks/cycle.  Verify with
+    # simTicks / system.cpu.numCycles if the clock changes.
+    ap.add_argument("--ticks-per-cycle", type=int, default=500)
     args = ap.parse_args()
 
     probe_lo = args.probe_base

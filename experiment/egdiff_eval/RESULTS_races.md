@@ -69,13 +69,14 @@ the fill can land later.
 
 | address delay | attempts with probe-send | pub→request avg | verify→request min / max / avg |
 |---|---|---|---|
-| 1 division | 125 / 128 | 24 cycles | **108 / 370 / 124 cycles** |
-| 12 divisions | 127 / 128 | 186 cycles | **230 / 662 / 394 cycles** |
+| 1 division | 125 / 128 | 12 cycles | **54 / 185 / 62 cycles** |
+| 12 divisions | 127 / 128 | 93 cycles | **115 / 331 / 197 cycles** |
 
 The 3–5 missing attempts are the sentinel-only/ambiguous cases the estimator
 already abstains on. Even at the minimum delay, the probe's cache request is
-~124 cycles ahead of the squash on average; at the PoC's 12 divisions it is
-~394 cycles ahead. That is the measured race.
+~62 cycles ahead of the squash on average; at the PoC's 12 divisions it is
+~197 cycles ahead. That is the measured race.  (Tick→cycle uses 500
+ticks/cycle for this 2 GHz configuration; verify with `simTicks/numCycles`.)
 
 ## Experiment 2 — predictor latency
 
@@ -110,7 +111,7 @@ disabled). Results:
 | 0 | 12 | 2 | MATCH, 8/8 |
 | 3 | 12 | 2 | MATCH, 8/8 |
 
-A 3–5 cycle later probe issue is harmless, consistent with the 108–662 cycle
+A 3–5 cycle later probe issue is harmless, consistent with the 54–331 cycle
 measured margin.
 
 The normal-latency event path was then **withdrawn**: it still corrupted the
