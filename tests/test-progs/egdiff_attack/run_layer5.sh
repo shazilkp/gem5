@@ -26,6 +26,7 @@ GEM5="${GEM5:-build/RISCV/gem5.opt}"
 WORK="${WORK:-/tmp/opencode/egdiff_layer5}"
 CC="${CC:-riscv64-linux-gnu-gcc}"
 OBJDUMP="${OBJDUMP:-riscv64-linux-gnu-objdump}"
+NM="${NM:-riscv64-linux-gnu-nm}"
 D=tests/test-progs/egdiff_attack
 BIN="$D/siphash_attack"
 
@@ -36,9 +37,24 @@ ok()  { echo "  PASS  $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
 
 echo "== build =="
-"$CC" -static -O2 -fno-pic -no-pie -o "$BIN" "$D/siphash_attack.c" \
+"$CC" -static -O2 -fno-pic -no-pie -o "$BIN" \
+    "$D/siphash_attack.c" "$D/egdiff_secret.c" \
     || { echo "build failed"; exit 1; }
 ok "compiled $BIN"
+
+# The attacker translation unit must have no architectural reference to the
+# SipHash key; only the helper (and the post-hoc oracle report) may read it.
+if "$CC" -c -O2 -fno-pic -no-pie -o "$WORK/attacker_l5.o" "$D/siphash_attack.c" \
+        2>/dev/null && ! "$NM" -u "$WORK/attacker_l5.o" | grep -q "secret_"; then
+    ok "attacker TU has no reference to the SipHash key"
+else
+    bad "attacker TU references the SipHash key"
+fi
+if "$NM" "$BIN" | awk '$3 ~ /^secret_/ && $2 ~ /^[A-Z]$/ {found=1} END{exit !found}'; then
+    bad "SipHash key is a global symbol (not static)"
+else
+    ok "SipHash key is static (unnameable from the attacker TU)"
+fi
 
 echo "== objdump load-topology check =="
 SIP=$("$OBJDUMP" -d "$BIN" | sed -n '/<siphash24>:/,/^$/p')

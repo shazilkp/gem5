@@ -22,6 +22,7 @@ cd "$(dirname "$0")/../../.." || exit 1
 GEM5="${GEM5:-build/RISCV/gem5.opt}"
 WORK="${WORK:-/tmp/opencode/egdiff_layer4}"
 CC="${CC:-riscv64-linux-gnu-gcc}"
+NM="${NM:-riscv64-linux-gnu-nm}"
 D=tests/test-progs/egdiff_attack
 ONLY="${ONLY:-}"
 SECRET="${SECRET:-}"
@@ -37,7 +38,8 @@ bad() { echo "  FAIL  $1"; fail=$((fail+1)); }
 run_case() { # run_case <name> <src> <type> <enabled> <tag> <verdict-token> <dst-gate>
     local name="$1" src="$2" type="$3" on="$4" tag="$5" want="$6" dst="${7:-}"
     local bin="$D/$name${SECRET:+.${SECRET}}"
-    "$CC" -static -O2 -fno-pic -no-pie $DEFS -o "$bin" "$D/$src" || return 1
+    "$CC" -static -O2 -fno-pic -no-pie $DEFS -o "$bin" \
+        "$D/$src" "$D/egdiff_secret.c" || return 1
     local out="$WORK/$name.$tag"
     rm -rf "$out"; mkdir -p "$out"
     EGDIFF_TYPE="$type" EGDIFF_ON="$on" \
@@ -75,6 +77,20 @@ if [ -z "$ONLY" ] || [ "$ONLY" = "1" ]; then
         "$WORK/poc_v1_specgvq_1shot.on/stats.txt" \
         && ok "mode 1: deferred (Wake) predictions fired" \
         || bad "mode 1: no deferred predictions"
+    # The attacker translation unit must have no architectural reference to the
+    # target value; only the helper (and the post-hoc oracle report) may read it.
+    if "$CC" -c -O2 -fno-pic -no-pie $DEFS -o "$WORK/attacker_v1.o" \
+            "$D/poc_v1_specgvq_1shot.c" 2>/dev/null \
+       && ! "$NM" -u "$WORK/attacker_v1.o" | grep -q "secret_"; then
+        ok "mode 1: attacker TU has no reference to the target value"
+    else
+        bad "mode 1: attacker TU references the target value"
+    fi
+    if "$NM" "$D/poc_v1_specgvq_1shot" | awk '$3 ~ /^secret_/ && $2 ~ /^[A-Z]$/ {found=1} END{exit !found}'; then
+        bad "mode 1: target value is a global symbol (not static)"
+    else
+        ok "mode 1: target value is static (unnameable from the attacker TU)"
+    fi
 fi
 
 echo "== Mode 2: commit-time NVQ capture + replay =="

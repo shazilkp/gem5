@@ -280,3 +280,10 @@ tests/test-progs/egdiff_attack/run_layer5.sh
   majority among the remaining attempts still yielded the correct byte.  The
   margin requirement is intentionally strict so a missed fill is an
   abstention, not a wrong vote.
+
+> **Note (after the code-ownership split):** the target key and the helper
+> moved to `egdiff_secret.c`, and the attacker translation unit now has no
+> reference to the key.  The gate still passes (`LAYER 5 PASSED`, 24/24); the
+> counts in this file (22/22, 79/80 votes, `sink=8976677841604280768`) are the
+> pre-refactor numbers.  Current numbers: 24/24, 80/80 votes,
+> `sink=8976677841604261728`.  Conclusions unchanged.

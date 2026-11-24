@@ -51,7 +51,8 @@ for v in $VALUES; do
     bin="$WORK/poc1_$v"
     extra=""
     [ -n "$REPS" ] && extra="-DREPS=$REPS"
-    "$CC" -static -O2 -fno-pic -no-pie $extra -DSECRET_VAL="$v" -o "$bin" "$SRC" \
+    "$CC" -static -O2 -fno-pic -no-pie $extra -DSECRET_VAL="$v" -o "$bin" \
+        "$SRC" "$D/egdiff_secret.c" \
         || { echo "build failed for $v"; continue; }
 
     declared_match=0
@@ -79,7 +80,7 @@ done
 echo
 echo "== negative controls (same binary, default value) =="
 bin="$WORK/poc1_ctl"
-"$CC" -static -O2 -fno-pic -no-pie -o "$bin" "$SRC" || exit 1
+"$CC" -static -O2 -fno-pic -no-pie -o "$bin" "$SRC" "$D/egdiff_secret.c" || exit 1
 printf '  off  : %s\n' "$(run_one "$bin" "$WORK/ctl_off"  egdiff 0)"
 printf '  flop : %s\n' "$(run_one "$bin" "$WORK/ctl_flop" flop   1)"
 

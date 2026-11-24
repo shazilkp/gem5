@@ -22,8 +22,8 @@ Everything below is **single-core, single-thread** (matching the paper and FLOP)
 | **1** | Commit-stage engine: 4K×88-bit table, FPC, TICK decay, 1/16 allocation, NVQ, Algorithm 1 | **DONE — 17/17 checks** | `tests/test-progs/egdiff_attack/run_layer1.sh` |
 | **2** | `SpecGVQ` lifecycle, dispatch prediction, LQ verification + squash, `lastMisp` blackout, ROB rollback | **DONE — 10/10 checks** | `tests/test-progs/egdiff_attack/run_layer2.sh` |
 | **3** | Deferred prediction (`Wake`/`Avail` binding, one-to-one) + asynchronous register wakeup | **DONE — 13/13 checks** (auditor-verified) | `tests/test-progs/egdiff_attack/run_layer3.sh` |
-| **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 12/12 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
-| **5** | Real library target (SipHash-2-4, 128-bit key) | **DONE — 22/22 checks** | `tests/test-progs/egdiff_attack/run_layer5.sh` |
+| **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 14/14 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
+| **5** | Real library target (SipHash-2-4, 128-bit key) | **DONE — 24/24 checks** | `tests/test-progs/egdiff_attack/run_layer5.sh` |
 
 **Regression status:** with `EGDIFF_ON=0` and with `EGDIFF_TYPE=flop`, all three
 Layer test binaries still produce exact architectural checksums and every
@@ -259,7 +259,8 @@ Fix plan (from the review), in order:
   The gate re-checks that topology so codegen drift cannot silently change the
   base.
 - Result: `k0 = 0123456789abcdef`, `k1 = f1e2d3c4b5a69788`, recovered 16/16 bytes
-  (79/80 informative votes). `EGDIFF_ON=0` and `EGDIFF_TYPE=flop` both recover
+  (80/80 informative votes after the code-ownership split). `EGDIFF_ON=0` and
+  `EGDIFF_TYPE=flop` both recover
   0/16 with every EgDiff statistic zero and the same architectural checksum.
 - **Independently verified**: the implementation passes the published
   SipHash-2-4 known-answer vectors (`len 0 → 0x726fdb47dd0e0e31`,
@@ -270,6 +271,21 @@ Caveats: the harness deliberately touches the key line immediately before the
 SipHash call, so the base is L1-resident and available at `L_atk` rename. Layer 5
 therefore exercises the base-available/committed-NVQ forward path; the deferred
 path is covered by Layer 3 and Mode 2.
+
+### Code ownership and the threat model (F2)
+The target value (Layers 4) and the SipHash key (Layer 5) live in a separate
+translation unit, `egdiff_secret.c`, as `static` objects. Only the helper
+(`victim_value`, `victim_value_fenced`, `victim_tag` -> `siphash24`) and the
+post-hoc `oracle_report_*` functions read them; the oracle plays the role of the
+experimenter checking the answer and runs after the measurement.
+
+The attacker translation unit therefore has **no architectural reference** to the
+value it is supposed to obtain. This is checked mechanically by the gates:
+`nm -u` on the attacker object shows no `secret_` symbol, and the linked binary
+has no global `secret_*` symbol (they are local). The claim is that the attacker's
+instruction stream never loads the value, so the only way it reaches an attacker
+register is the predictor. This is the same-process "cannot name it" model used
+by FLOP's engine boundary, **not** an MMU-enforced isolation claim.
 
 ### Layer 3 result — PASS (13/13, auditor-verified)
 Three independent phases, each with its own load PCs:
@@ -445,8 +461,8 @@ has a constant stride. This does not weaken the attack: the attacker controls
 - [ ] `run_layer2.sh` → `LAYER 2 PASSED` (10 checks).
 - [ ] `run_layer3.sh` → `LAYER 3 PASSED` (13 checks, incl. phase attribution and the
       `EGDIFF_ON=0` negative control).
-- [ ] `run_layer4.sh` → `LAYER 4 PASSED` (9 checks, both modes + controls).
-- [ ] `run_layer5.sh` → `LAYER 5 PASSED` (22 checks, SipHash target + controls).
+- [ ] `run_layer4.sh` → `LAYER 4 PASSED` (14 checks, both modes + isolation + controls).
+- [ ] `run_layer5.sh` → `LAYER 5 PASSED` (24 checks, SipHash target + isolation + controls).
 - [ ] With `EGDIFF_ON=0`, Layer 1/2 tests still produce exact checksums and zero
       EgDiff statistics (predictor must be inert).
 - [ ] With `EGDIFF_TYPE=flop`, FLOP behaviour is unchanged (no EgDiff stats move).

