@@ -1,7 +1,8 @@
 # Race, squash, and latency experiments
 
-Status: experiments 1–3 complete. Mode 2 remains on hold (its off control still
-emits seven bytes; see `SUBMISSION.md` §9.5).
+Status: experiments 1–3 complete. Mode 2's estimator is fixed by the
+`flush_drain()` change: its off control is `known=00`, FLOP emits its own zero
+(`known=ff`, `NO-MATCH`), and Layer 4 is 17/17.
 
 ## Experiment 3 — does a speculative fill survive a branch squash?
 

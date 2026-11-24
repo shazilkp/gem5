@@ -330,14 +330,15 @@ state dependent).
 | experiment | result | controls |
 |---|---|---|
 | Mode 1 (`SpecGVQ`, crafted victim) | 64-bit value recovered (5/5 secrets) | off/FLOP: NO-MATCH, 0 |
-| Mode 2 (`NVQ` capture + replay, fenced victim) | 64-bit value recovered | off: NO-MATCH but emits 7 wrong bytes (`3f3f…00`, `known=fe`); FLOP: NO-MATCH but emits 8 zero bytes with `known=ff` |
+| Mode 2 (`NVQ` capture + replay, fenced victim) | 64-bit value recovered | off: `known=00`, `NO-MATCH`; FLOP: emits its own constant 0 (`known=ff`), `NO-MATCH` |
 | SipHash-2-4, empty message | 16/16 key bytes, `d = 5, 6` | off/FLOP: 0/16 correct |
 | Monocypher `crypto_verify32` | 8/8 bytes of `key[24..31]`, `d = 7…14`, 16 votes/lane | off/FLOP: 0/8 |
 
 In A4 the gem5 trace shows, for each key byte, 16 predictions whose `base_val` is
 that byte (18 for `0x10`; the extra two are not filtered by dependent PC); when
 the base was still speculative, `base_pc` is the key-load PC (`0x10f58 = lbu
-a5,0(a0)`, `0x10f7e = lbu a0,7(a0)`), and when it had committed, `base_pc = 0`
+a5,0(a0)`, `0x10f7e = lbu a0,7(a0)` in that build; the current build measures
+`0x10f60`/`0x10f86`), and when it had committed, `base_pc = 0`
 (the NVQ stores values, not PCs). The baseline harness warms the key line before
 the measured lane, so most wins are NVQ-sourced; a `COLD_KEY=1` variant removes
 the warm-up calls and still recovers 8/8, so the mechanism is GVQ/NVQ forwarding,

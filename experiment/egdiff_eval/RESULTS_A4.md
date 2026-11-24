@@ -87,6 +87,10 @@ from the key byte load to the marker, 1-based):
 
 (`SUMMARY n=8 d_min=7 d_max=14`.)
 
+PCs are build-dependent: a fresh rebuild of the same sources measured
+`0x10f60`/`0x10f86` for the two quoted epilogue loads while the `d` map and the
+recovered bytes were unchanged. Treat the PC column as one build's disassembly.
+
 The measured 7..14 matches the prevalence study's `t_verify32` table exactly
 (the same compiler, same Monocypher source and the same `load64_le` epilogue).
 The distances are shifted by the six `ld` stack-restore loads in
