@@ -223,7 +223,15 @@ main(void)
             /* ---- 4. Delay L_atk's address using register-only divisions ----
              * No constants, so nothing spills/reloads between the helper's
              * load and L_atk (a reload would become the prediction base). */
+#if ATK_DIVS == 0
+            /* Keep the architectural value at the sentinel line.  With no
+             * division chain, `ok|1` is usually 1 and the marker would read
+             * atk_buf[1] (zero), destroying the calibration line and turning
+             * the control into an invalid-measurement artifact. */
+            uint64_t x = 0;
+#else
             uint64_t x = ok | 1;
+#endif
 #if ATK_DIVS >= 1
             x /= (ok + 2);
 #endif
