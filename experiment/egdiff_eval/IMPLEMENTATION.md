@@ -22,8 +22,8 @@ Everything below is **single-core, single-thread** (matching the paper and FLOP)
 | **1** | Commit-stage engine: 4K×88-bit table, FPC, TICK decay, 1/16 allocation, NVQ, Algorithm 1 | **DONE — 17/17 checks** | `tests/test-progs/egdiff_attack/run_layer1.sh` |
 | **2** | `SpecGVQ` lifecycle, dispatch prediction, LQ verification + squash, `lastMisp` blackout, ROB rollback | **DONE — 10/10 checks** | `tests/test-progs/egdiff_attack/run_layer2.sh` |
 | **3** | Deferred prediction (`Wake`/`Avail` binding, one-to-one) + asynchronous register wakeup | **DONE — 13/13 checks** (auditor-verified) | `tests/test-progs/egdiff_attack/run_layer3.sh` |
-| **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 9/9 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
-| **5** | Real library target (SipHash-2-4) | not started | — |
+| **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 12/12 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
+| **5** | Real library target (SipHash-2-4, 128-bit key) | **DONE — 22/22 checks** | `tests/test-progs/egdiff_attack/run_layer5.sh` |
 
 **Regression status:** with `EGDIFF_ON=0` and with `EGDIFF_TYPE=flop`, all three
 Layer test binaries still produce exact architectural checksums and every
@@ -47,6 +47,7 @@ the Layer 3 changes.
 | `tests/test-progs/egdiff_attack/test_layer3_deferred_wake.c` + `run_layer3.sh` | Layer 3 (three deferred/normal sub-cases). |
 | `tests/test-progs/egdiff_attack/poc_v1_specgvq_1shot.c` + `run_layer4.sh` | Layer 4 Mode 1 (1-shot teleportation) and its controls. |
 | `tests/test-progs/egdiff_attack/poc_v2_nvq_fence_bypass.c` | Layer 4 Mode 2 (fenced-helper NVQ capture + replay) and its controls. |
+| `tests/test-progs/egdiff_attack/siphash_attack.c` + `run_layer5.sh` | Layer 5 (real SipHash-2-4 target) and its controls. |
 
 ### Modified
 | File | Change |
@@ -123,8 +124,9 @@ dynamic distance 2) shows, for the `B` load:
 > attack (deferred `SpecGVQ` teleportation) is therefore the natural fast path,
 > not an edge case.
 
-### Layer 4 (Mode 1) — PASS (5/5): 1-shot in-flight `SpecGVQ` teleportation
-`poc_v1_specgvq_1shot.c`, gated by `run_layer4.sh`.
+### Layer 4 (Mode 1) — PASS (7/7 for Mode 1): 1-shot in-flight `SpecGVQ` teleportation
+`poc_v1_specgvq_1shot.c`, gated by `run_layer4.sh`. Measurement hardening is
+documented in `RESULTS_step1.md`.
 
 Construction:
 - The victim is `noinline, noclone, noipa`, branchless, performs no
@@ -143,19 +145,30 @@ Construction:
   with the predicted secret.
 - After training, `atk_buf[0]` is overwritten with a **sentinel** (a store does
   not train the predictor). When the mispredicted `L_atk` is re-executed after
-  the squash, its architectural probe fills the sentinel line, which is
-  **ignored** during recovery — otherwise the re-execution masks the
-  speculative fill (this was observed as "recovered == the architectural
-  value").
+  the squash, its architectural probe fills the sentinel line, which is used as
+  a **per-attempt hot/cold calibration reference** rather than a vote.
+- The estimator requires exactly one non-sentinel line below the calibrated
+  threshold, alternates two sentinels (`0xA5…` / `0x5A…`) so a byte equal to a
+  sentinel byte is still measurable, and reports an unresolved byte as
+  `UNKNOWN` (`known` bit clear) rather than fabricating one. The verdict
+  requires `known == 0xff`, so a partial measurement cannot be reported as a
+  success.
+- A `fence.i` between the eviction loop and the helper call drains the
+  eviction's outstanding misses; without it their L1D MSHR occupancy can starve
+  the transient probe (measured 1/128 tries vs 127/128).
 
-Result (deterministic across runs):
+Result (deterministic; each row one run):
 ```
-EgDiff on  : secret=1122334455667788 recovered=1122334455667788  MATCH
-EgDiff off : recovered=0303030303030303                          NO-MATCH
-FLOP LVP   : recovered=0303030303030303                          NO-MATCH
+EgDiff on  : 0x1122334455667788 MATCH known=ff
+             0xDEADBEEFCAFEBABE MATCH known=ff
+             0xFFFF0000FFFF0000 MATCH known=ff
+             0xA5A5A5A55A5A5A5A MATCH known=ff   (both sentinel bytes)
+             0x5A5A5A5AA5A5A5A5 MATCH known=ff   (both sentinel bytes)
+EgDiff off : recovered=0000000000000000 known=00 NO-MATCH
+FLOP LVP   : recovered=0000000000000000 known=00 NO-MATCH
 ```
-Stats for the EgDiff run: deferred bindings/predictions in the 10^4 range,
-`numPredictionIncorrect > 0` (the attack loads, as expected).
+Stats for the EgDiff run: deferred predictions in the 10^5 range,
+`numPredictionIncorrect > 0` (the measured loads, as expected).
 
 ### Layer 4 (Mode 2) — PASS (conformance experiment, after review fixes)
 `poc_v2_nvq_fence_bypass.c`, gated by `run_layer4.sh`.
@@ -233,6 +246,30 @@ Fix plan (from the review), in order:
   4. Require a strict margin and a real architectural checksum in the verdict.
   5. Use `fence.i` if the fence-drain property is part of the claim, else scope
      the claim down.
+
+### Layer 5 — PASS (22/22): real SipHash-2-4 target
+`tests/test-progs/egdiff_attack/siphash_attack.c`, gated by `run_layer5.sh`.
+
+- Uses the canonical `majek/csiphash` reference `siphash24()` verbatim (only the
+  `uint8_t` signature and a `noinline/noclone/noipa` annotation, so the compiler
+  cannot specialise away the zero-length reference tail).
+- With `src_sz = 0`, `objdump` gives `d(k1 → L_atk) = 5` and `d(k0 → L_atk) = 6`
+  dynamic loads; the four intervening loads are literal-pool constants and the
+  `switch` jump-table load, and there is no load between the `ret` and `L_atk`.
+  The gate re-checks that topology so codegen drift cannot silently change the
+  base.
+- Result: `k0 = 0123456789abcdef`, `k1 = f1e2d3c4b5a69788`, recovered 16/16 bytes
+  (79/80 informative votes). `EGDIFF_ON=0` and `EGDIFF_TYPE=flop` both recover
+  0/16 with every EgDiff statistic zero and the same architectural checksum.
+- **Independently verified**: the implementation passes the published
+  SipHash-2-4 known-answer vectors (`len 0 → 0x726fdb47dd0e0e31`,
+  `len 1 → 0x74f839c593dc67fd`, `len 15 → 0xa129ca6149be45e5`) when linked
+  against a separately built test harness.
+
+Caveats: the harness deliberately touches the key line immediately before the
+SipHash call, so the base is L1-resident and available at `L_atk` rename. Layer 5
+therefore exercises the base-available/committed-NVQ forward path; the deferred
+path is covered by Layer 3 and Mode 2.
 
 ### Layer 3 result — PASS (13/13, auditor-verified)
 Three independent phases, each with its own load PCs:
@@ -408,6 +445,8 @@ has a constant stride. This does not weaken the attack: the attacker controls
 - [ ] `run_layer2.sh` → `LAYER 2 PASSED` (10 checks).
 - [ ] `run_layer3.sh` → `LAYER 3 PASSED` (13 checks, incl. phase attribution and the
       `EGDIFF_ON=0` negative control).
+- [ ] `run_layer4.sh` → `LAYER 4 PASSED` (9 checks, both modes + controls).
+- [ ] `run_layer5.sh` → `LAYER 5 PASSED` (22 checks, SipHash target + controls).
 - [ ] With `EGDIFF_ON=0`, Layer 1/2 tests still produce exact checksums and zero
       EgDiff statistics (predictor must be inert).
 - [ ] With `EGDIFF_TYPE=flop`, FLOP behaviour is unchanged (no EgDiff stats move).
