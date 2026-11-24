@@ -329,6 +329,18 @@ identical architectural checksum. The gate (`run_layer6.sh`) re-checks the
 ownership split, the distance map, the adjacent-marker property, the recovery
 and both controls: **36/36**.
 
+#### Dispatch-order confirmation (closes the architectural-trace caveat)
+The EgDiff trace now records every slot allocation (`alloc sn=.. pc=..`) and, on
+each prediction, the slot's value and PC (`base_val`, `base_pc`). Running the A4
+attack with `--debug-flags=EgDiff` shows, for each of the eight key bytes, 16
+predictions whose `base_val` is that byte, and whose `base_pc` is the key-load PC
+when the base was still in the speculative queue (`0x10f58` and `0x10f7e` are
+`lbu` key loads). A one-call `memcmp` probe (`memcmp_probe.c` +
+`measure_dispatch_d.py`) shows architectural and dispatch `d` agree at 1 for both
+the equal and early-exit cases. See `RESULTS_dispatch_trace.md`. In-window
+prevalence targets have `d <= 7`, so the architectural lower bound leaves >= 25
+loads of margin against wrong-path pollution.
+
 Caveats recorded in `RESULTS_A4.md`: distances come from QEMU's architectural
 trace (there is no branch between the last key load and the marker, so dispatch
 order matches); lane offsets are public code structure, only the key values come

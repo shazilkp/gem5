@@ -9,3 +9,4 @@ test_layer2_spec_and_squash
 test_layer3_deferred_wake
 siphash_attack
 poc_verify32
+memcmp_probe

@@ -318,8 +318,9 @@ LoadValuePredictionUnit::dispatchLoad(uint64_t seqNum, Addr instPC,
         if (r.nvqBase)
             ++stats.egdiffNVQBases;
         DPRINTF(EgDiff, "[sn:%llu] dispatch PC %#x predicts %#x "
-                "(d=%u, base=%s)\n", seqNum, instPC, r.value, r.distance,
-                r.nvqBase ? "nvq" : "specgvq");
+                "(d=%u, base=%s, base_pc=%#x, base_val=%#x)\n",
+                seqNum, instPC, r.value, r.distance,
+                r.nvqBase ? "nvq" : "specgvq", r.basePc, r.baseVal);
     } else if (r.deferred) {
         ++stats.egdiffDeferredBindings;
         DPRINTF(EgDiff, "[sn:%llu] dispatch PC %#x deferred (d=%u)\n",
@@ -364,9 +365,10 @@ LoadValuePredictionUnit::completeLoad(uint64_t seqNum, RegVal actualVal,
         wakeInst = r.wakeTarget->inst;
         wakeResult = r.wake;
         DPRINTF(EgDiff, "[sn:%llu] deferred wakeup -> publish %#x to "
-                "dependent PC %#x [dep:%llu] (d=%u)\n", seqNum, r.wake.value,
+                "dependent PC %#x [dep:%llu] (d=%u, base_pc=%#x, "
+                "base_val=%#x)\n", seqNum, r.wake.value,
                 r.wakeTarget->pc, (unsigned long long)r.wakeTarget->seqNum,
-                r.wakeTarget->distance);
+                r.wakeTarget->distance, r.wake.basePc, r.wake.baseVal);
     } else if (r.wakeIgnored) {
         ++stats.egdiffDeferredIgnored;
         DPRINTF(EgDiff, "[sn:%llu] deferred wakeup ignored "

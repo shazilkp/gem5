@@ -92,6 +92,8 @@ struct EgDiffPredictResult
     bool allocated = false;   // a new speculative-queue slot was allocated
     uint64_t value = 0;
     uint8_t distance = 0;
+    uint64_t baseVal = 0;     // value of the slot used as the base
+    Addr basePc = 0;          // PC of that slot (0 when it came from the NVQ)
 };
 
 /** Result of a load-completion / verification event. */

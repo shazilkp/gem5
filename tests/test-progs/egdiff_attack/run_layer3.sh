@@ -69,12 +69,12 @@ eq  numPredictionIncorrect 0
 # Phase attribution by trained distance (robust to code-layout changes):
 #   phase A  publishes with d = 2  (both loads stream, base unresolved)
 #   phase C  publishes with d = 22 (base already completed at dispatch)
-if grep -aq "deferred wakeup -> publish .* (d=2)$" "$TR"; then
+if grep -aqE "deferred wakeup -> publish .* \(d=2[,)]" "$TR"; then
     ok "phase A: deferred wakeup delivered at d=2"
 else
     bad "phase A: no deferred wakeup delivered at d=2"
 fi
-if grep -aq "deferred wakeup -> publish .* (d=22)$" "$TR"; then
+if grep -aqE "deferred wakeup -> publish .* \(d=22[,)]" "$TR"; then
     ok "phase C: normal/deferred value delivered at d=22"
 else
     bad "phase C: no value delivered at d=22"

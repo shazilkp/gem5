@@ -7,6 +7,8 @@
 #include <algorithm>
 
 #include "base/logging.hh"
+#include "base/trace.hh"
+#include "debug/EgDiff.hh"
 
 namespace gem5
 {
@@ -153,6 +155,8 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
             if (base.avail || base.vp) {
                 haveBase = true;
                 baseVal = base.value;
+                res.baseVal = base.value;
+                res.basePc = base.pc;
             } else {
                 // Bind a deferred wakeup (one-to-one, Section III-C).
                 EgDiffSpecEntry &mutableBase = specGVQ[curIdx - d];
@@ -167,6 +171,7 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
             haveBase = true;
             baseVal = nvq[d - curIdx - 1];
             res.nvqBase = true;
+            res.baseVal = baseVal;
         }
 
         if (haveBase) {
@@ -180,6 +185,7 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
     }
 
     specGVQ.push_back(q);
+    DPRINTF(EgDiff, "alloc sn=%llu pc=%#x\n", seqNum, pc);
     res.allocated = true;
     return res;
 }
@@ -248,6 +254,8 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
                 res.wake.valid = true;
                 res.wake.value = predVal;
                 res.wake.distance = dep.distance;
+                res.wake.baseVal = actualVal;
+                res.wake.basePc = q.pc;
             }
         }
         // Consume the binding regardless.
