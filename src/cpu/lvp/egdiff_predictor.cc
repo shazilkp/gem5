@@ -16,8 +16,10 @@ namespace lvp
 {
 
 EgDiffPredictor::EgDiffPredictor(unsigned tableEntries, unsigned seed,
-                                 bool coldDeterministicAlloc)
+                                 bool coldDeterministicAlloc,
+                                 bool nvqBaseAllowed)
     : coldDeterministicAlloc(coldDeterministicAlloc),
+      nvqBaseAllowed(nvqBaseAllowed),
       rng(seed)
 {
     fatal_if(tableEntries == 0 || (tableEntries & (tableEntries - 1)) != 0,
@@ -190,9 +192,11 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
                     res.deferred = true;
                 }
             }
-        } else {
+        } else if (nvqBaseAllowed) {
             // Base load has already committed: read it from the NVQ.
-            // 0-based nvq index (d - curIdx - 1) == NVQ[d - curIdx].
+            // This is the model's Rule C extension.  The paper's prediction
+            // text only describes the speculative queue, so strict-fidelity
+            // experiments disable this path.
             haveBase = true;
             baseVal = nvq[d - curIdx - 1];
             res.nvqBase = true;

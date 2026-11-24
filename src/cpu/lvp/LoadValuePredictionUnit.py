@@ -78,6 +78,14 @@ class LoadValuePredictionUnit(SimObject):
         "(Layer-1 unit testing convenience; NOT the modelled hardware)"
     )
 
+    egdiffNvqBase = Param.Bool(
+        True,
+        "Allow a prediction base from the committed NVQ when the speculative "
+        "entry has retired (the model's Rule C extension).  The paper's "
+        "prediction text describes only the speculative queue; disable this "
+        "for strict paper-fidelity experiments."
+    )
+
     egdiffLatency = Param.Unsigned(
         0,
         "EgDiff normal prediction latency in cycles (paper: 3). The value is "

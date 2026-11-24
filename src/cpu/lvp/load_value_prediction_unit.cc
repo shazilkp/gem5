@@ -28,7 +28,7 @@ LoadValuePredictionUnit::LoadValuePredictionUnit(const Params &p)
     if (predictorType == "egdiff") {
         egdiffPredictor = std::make_unique<EgDiffPredictor>(
             p.egdiffTableEntries, p.egdiffSeed,
-            p.egdiffColdDeterministicAlloc);
+            p.egdiffColdDeterministicAlloc, p.egdiffNvqBase);
         if (egdiffLatency > 16) {
             fatal("egdiffLatency=%u exceeds the supported modelling range "
                   "(0..16 cycles)", egdiffLatency);

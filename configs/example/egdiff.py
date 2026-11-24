@@ -32,6 +32,7 @@ COLD_ALLOC = os.environ.get("EGDIFF_COLD_ALLOC", "0") not in (
     "0", "false", "no")
 LATENCY = int(os.environ.get("EGDIFF_LATENCY", "0"))
 DEFERRED_LATENCY = int(os.environ.get("EGDIFF_DEFERRED_LATENCY", "0"))
+NVQ_BASE = os.environ.get("EGDIFF_NVQ_BASE", "1") not in ("0", "false", "no")
 
 _real_config_cache = CacheConfig.config_cache
 
@@ -52,12 +53,13 @@ def _egdiff_config_cache(options, system):
         lvp.egdiffColdDeterministicAlloc = COLD_ALLOC
         lvp.egdiffLatency = LATENCY
         lvp.egdiffDeferredLatency = DEFERRED_LATENCY
+        lvp.egdiffNvqBase = NVQ_BASE
 
         print(
             "[egdiff] cpu %d: type=%s enabled=%s entries=%d seed=%d "
-            "coldAlloc=%s latency=%d deferredLatency=%d"
+            "coldAlloc=%s latency=%d deferredLatency=%d nvqBase=%s"
             % (cpu.cpu_id, PRED_TYPE, PRED_ON, TABLE, SEED, COLD_ALLOC,
-               LATENCY, DEFERRED_LATENCY)
+               LATENCY, DEFERRED_LATENCY, NVQ_BASE)
         )
 
 

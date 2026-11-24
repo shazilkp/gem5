@@ -120,7 +120,7 @@ class EgDiffPredictor
     static constexpr uint64_t LAST_MISP_WINDOW = 1024;
 
     EgDiffPredictor(unsigned tableEntries, unsigned seed,
-                    bool coldDeterministicAlloc);
+                    bool coldDeterministicAlloc, bool nvqBaseAllowed = true);
 
     /**
      * 12-bit direct index hash.
@@ -228,6 +228,7 @@ class EgDiffPredictor
     uint64_t instructionCount = 0;
 
     const bool coldDeterministicAlloc;
+    const bool nvqBaseAllowed;
     std::mt19937_64 rng;
     std::uniform_real_distribution<double> dist{0.0, 1.0};
 };
