@@ -24,6 +24,7 @@ Everything below is **single-core, single-thread** (matching the paper and FLOP)
 | **3** | Deferred prediction (`Wake`/`Avail` binding, one-to-one) + asynchronous register wakeup | **DONE — 13/13 checks** (auditor-verified) | `tests/test-progs/egdiff_attack/run_layer3.sh` |
 | **4** | End-to-end experiments (`SpecGVQ` in-flight, `NVQ` capture + replay) | **DONE — 14/14 checks** | `tests/test-progs/egdiff_attack/run_layer4.sh` |
 | **5** | Real library target (SipHash-2-4, 128-bit key) | **DONE — 24/24 checks** | `tests/test-progs/egdiff_attack/run_layer5.sh` |
+| **6 / A4** | Real Monocypher `crypto_verify32` target in gem5 | **DONE — 36/36 checks** | `tests/test-progs/egdiff_attack/run_layer6.sh` |
 
 **Regression status:** with `EGDIFF_ON=0` and with `EGDIFF_TYPE=flop`, all three
 Layer test binaries still produce exact architectural checksums and every
@@ -303,6 +304,37 @@ aggregate — high accuracy and coverage in the expected band. It is not a
 reproduction of the paper's per-benchmark numbers (different ISA, hash, memory
 hierarchy, window length, no SimPoints).
 
+### A4 / Layer 6 — real Monocypher target in gem5 (PASS, 36/36)
+`tests/test-progs/egdiff_attack/{poc_verify32.c,target_verify32.c,measure_d.py,run_layer6.sh}`,
+results in `RESULTS_A4.md`.
+
+The prevalence study said end-loading check functions are structurally eligible;
+this experiments confirms it on a real library. `target_verify32.c` owns a
+32-byte key as a `static const` object and exposes only
+`target_verify32(guess)`, which calls the real `crypto_verify32(guess, key)`.
+The attacker TU has no key reference (`nm -u` clean; the key is a local `r`
+symbol).
+
+`measure_d.py` re-derives the distances in the freshly built binary with
+`qemu-riscv64 -singlestep` + `objdump` (not taken from the prevalence table):
+the last key word's byte loads are at **d = 7..14**, with **zero loads between
+the callee `ret` and the marker**. The attacker trains at each measured `d`
+(generalised from the Mode 1 `d=1` pair training) and recovers the word via the
+cache probe.
+
+Result: **8/8 bytes** of key[24..31] = `a1108f2ebd4cdb6a`, 16 votes per lane,
+`known=ff`. `EGDIFF_ON=0` and `EGDIFF_TYPE=flop` both recover 0/8 with
+`known=00`, every EgDiff statistic zero, the FLOP predictor active, and an
+identical architectural checksum. The gate (`run_layer6.sh`) re-checks the
+ownership split, the distance map, the adjacent-marker property, the recovery
+and both controls: **36/36**.
+
+Caveats recorded in `RESULTS_A4.md`: distances come from QEMU's architectural
+trace (there is no branch between the last key load and the marker, so dispatch
+order matches); lane offsets are public code structure, only the key values come
+from the oracle; `crypto_chacha20` (modal d = 519) is structurally out of range
+and recorded rather than re-run.
+
 ### Code ownership and the threat model (F2)
 The target value (Layers 4) and the SipHash key (Layer 5) live in a separate
 translation unit, `egdiff_secret.c`, as `static` objects. Only the helper
@@ -494,6 +526,7 @@ has a constant stride. This does not weaken the attack: the attacker controls
       `EGDIFF_ON=0` negative control).
 - [ ] `run_layer4.sh` → `LAYER 4 PASSED` (14 checks, both modes + isolation + controls).
 - [ ] `run_layer5.sh` → `LAYER 5 PASSED` (24 checks, SipHash target + isolation + controls).
+- [ ] `run_layer6.sh` → `LAYER 6 PASSED` (36 checks, Monocypher verify32 target + controls).
 - [ ] With `EGDIFF_ON=0`, Layer 1/2 tests still produce exact checksums and zero
       EgDiff statistics (predictor must be inert).
 - [ ] With `EGDIFF_TYPE=flop`, FLOP behaviour is unchanged (no EgDiff stats move).
