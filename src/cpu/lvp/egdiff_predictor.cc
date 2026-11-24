@@ -180,6 +180,7 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
     }
 
     specGVQ.push_back(q);
+    res.allocated = true;
     return res;
 }
 

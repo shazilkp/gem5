@@ -89,6 +89,7 @@ struct EgDiffPredictResult
     bool valid = false;       // a value is being forwarded
     bool deferred = false;    // waiting on an unavailable base load
     bool nvqBase = false;     // base came from the committed NVQ (curIdx < d)
+    bool allocated = false;   // a new speculative-queue slot was allocated
     uint64_t value = 0;
     uint8_t distance = 0;
 };

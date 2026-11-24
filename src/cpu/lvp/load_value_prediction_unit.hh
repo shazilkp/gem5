@@ -170,6 +170,8 @@ class LoadValuePredictionUnit : public SimObject
 
         // ---- EgDiff statistics ----
         statistics::Scalar egdiffCommits;
+        statistics::Scalar egdiffCommittedPredicted;
+        statistics::Scalar egdiffDispatchedLoads;
         statistics::Scalar egdiffTableAllocations;
         statistics::Scalar egdiffPollingSteps;
         statistics::Scalar egdiffStrideMatches;

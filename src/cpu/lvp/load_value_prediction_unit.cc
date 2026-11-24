@@ -62,6 +62,10 @@ LoadValuePredictionUnit::LVPStats::LVPStats(LoadValuePredictionUnit *lvpu)
                "Predictions suppressed (8-byte non-zero)"),
       ADD_STAT(egdiffCommits, statistics::units::Count::get(),
                "EgDiff: committed loads trained at the commit stage"),
+      ADD_STAT(egdiffCommittedPredicted, statistics::units::Count::get(),
+               "EgDiff: committing loads whose prediction verified"),
+      ADD_STAT(egdiffDispatchedLoads, statistics::units::Count::get(),
+               "EgDiff: loads dispatched as speculative-queue candidates"),
       ADD_STAT(egdiffTableAllocations, statistics::units::Count::get(),
                "EgDiff: prediction-table entries allocated (tag mismatch)"),
       ADD_STAT(egdiffPollingSteps, statistics::units::Count::get(),
@@ -257,6 +261,14 @@ LoadValuePredictionUnit::commitLoad(uint64_t seqNum, Addr instPC,
     if (!egdiffPredictor)
         return;
 
+    // Architectural accounting for coverage/accuracy: a prediction only counts
+    // if the load it belongs to actually commits.  Counting at dispatch is
+    // wrong on branchy code, where wrong-path loads are predicted and then
+    // squashed, inflating both the numerator and the denominator.
+    const auto &spec = egdiffPredictor->getSpecGVQ();
+    if (!spec.empty() && spec.front().seqNum == seqNum && spec.front().vp)
+        ++stats.egdiffCommittedPredicted;
+
     const EgDiffCommitResult r =
         egdiffPredictor->commitLoad(instPC, actualVal);
 
@@ -297,6 +309,9 @@ LoadValuePredictionUnit::dispatchLoad(uint64_t seqNum, Addr instPC,
 
     const EgDiffPredictResult r =
         egdiffPredictor->dispatchLoad(instPC, seqNum, inst);
+
+    if (r.allocated)
+        ++stats.egdiffDispatchedLoads;
 
     if (r.valid) {
         ++stats.egdiffPredictions;
