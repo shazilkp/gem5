@@ -48,6 +48,7 @@
 #include "cpu/o3/limits.hh"
 #include "cpu/o3/lsq.hh"
 #include "debug/Activity.hh"
+#include "debug/EgDiff.hh"
 #include "debug/HtmCpu.hh"
 #include "debug/IEW.hh"
 #include "debug/LSQUnit.hh"
@@ -107,6 +108,12 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
 {
     LSQRequest *request = dynamic_cast<LSQRequest *>(pkt->senderState);
     DynInstPtr inst = request->instruction();
+
+    if (inst->isLoad() && !inst->isSquashed()) {
+        DPRINTF(EgDiff, "[tick:%llu] load-complete PC %#x sn:%llu "
+                "addr %#x\n", curTick(), inst->pcState().instAddr(),
+                inst->seqNum, pkt->getAddr());
+    }
 
     // hardware transactional memory
     // sanity check
@@ -620,7 +627,15 @@ LSQUnit::executeLoad(const DynInstPtr &inst)
         return NoFault;
     }
 
+    DPRINTF(EgDiff, "[tick:%llu] load-request PC %#x sn:%llu addr %#x\n",
+            curTick(), inst->pcState().instAddr(), inst->seqNum,
+            inst->effAddrValid() ? inst->physEffAddr : 0);
+
     load_fault = inst->initiateAcc();
+
+    DPRINTF(EgDiff, "[tick:%llu] load-sent PC %#x sn:%llu addr %#x\n",
+            curTick(), inst->pcState().instAddr(), inst->seqNum,
+            inst->savedRequest ? inst->savedRequest->getVaddr() : 0);
 
     // SpaceSpec: the request is NOT tagged here.  initiateAcc() has already
     // created the Request *and sent the packet* by the time it returns, so

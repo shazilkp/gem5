@@ -255,6 +255,14 @@ class IEW
      */
     void lvpWakeDeferred(DynInst *inst, RegVal value);
 
+    /** Publish a delayed EgDiff prediction: write the PRF and wake dependents. */
+    void lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid,
+                    bool wake);
+
+    /** Schedule lvpPublish after `latency` cycles (0 publishes immediately). */
+    void lvpSchedule(const DynInstPtr &inst, RegVal value, ThreadID tid,
+                     unsigned latency, bool wake);
+
   private:
     /** Sends commit proper information for a squash due to a branch
      * mispredict.

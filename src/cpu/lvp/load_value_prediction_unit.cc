@@ -21,8 +21,18 @@ LoadValuePredictionUnit::LoadValuePredictionUnit(const Params &p)
       cvu(p.cvu),
       enabled(p.enabled),
       predictorType(p.predictorType),
+      egdiffLatency(p.egdiffLatency),
+      egdiffDeferredLatency(p.egdiffDeferredLatency),
       stats(this)
 {
+    if (predictorType == "egdiff" && egdiffLatency != 0) {
+        fatal("egdiffLatency=%u is not supported: the delayed normal-publish "
+              "event path corrupts physical-register lifetime.  Use the PoC "
+              "probe-issue delay proxy for normal latency, or "
+              "egdiffDeferredLatency for the deferred +2 path.",
+              egdiffLatency);
+    }
+
     if (predictorType == "egdiff") {
         egdiffPredictor = std::make_unique<EgDiffPredictor>(
             p.egdiffTableEntries, p.egdiffSeed,
@@ -347,8 +357,9 @@ LoadValuePredictionUnit::completeLoad(uint64_t seqNum, RegVal actualVal,
     if (r.verified) {
         if (!r.ok) {
             ++stats.numPredictionIncorrect;
-            DPRINTF(EgDiff, "[sn:%llu] MISMATCH actual %#x -> squash, "
-                    "suppress until %#llx\n", seqNum, actualVal,
+            DPRINTF(EgDiff, "[tick:%llu] [sn:%llu] MISMATCH actual %#x -> "
+                    "squash, suppress until %#llx\n", curTick(), seqNum,
+                    actualVal,
                     (unsigned long long)egdiffPredictor->getSuppressUntil());
         } else {
             ++stats.numPredictionCorrect;

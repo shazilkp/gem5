@@ -54,9 +54,11 @@
 #include "cpu/timebuf.hh"
 #include "debug/Activity.hh"
 #include "debug/Drain.hh"
+#include "debug/EgDiff.hh"
 #include "debug/IEW.hh"
 #include "debug/LVP.hh"
 #include "params/BaseO3CPU.hh"
+#include "sim/eventq.hh"
 
 namespace gem5
 {
@@ -495,35 +497,94 @@ IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid)
 }
 
 void
-IEW::lvpWakeDeferred(DynInst *inst, RegVal value)
+IEW::lvpPublish(const DynInstPtr &inst, RegVal value, ThreadID tid, bool wake)
 {
-    ThreadID tid = inst->threadNumber;
-
-    DPRINTF(LVP, "[tid:%i] EgDiff deferred wakeup: PC %s [sn:%llu] -> "
-            "forward val %#x\n", tid, inst->pcState(), inst->seqNum, value);
+    // A delayed publish must not touch an instruction that has left the ROB:
+    // its physical destination may already have been recycled.  This check is
+    // only valid for the delayed path; the immediate (latency 0) path runs at
+    // dispatch, before the instruction's ROB entry is necessarily visible.
+    if (!inst || !inst->isInROB() || inst->isSquashed() ||
+        inst->isCompleted() || inst->isCommitted())
+        return;
 
     if (inst->numDestRegs() > 0) {
         PhysRegIdPtr destReg = inst->renamedDestIdx(0);
-        if (destReg && !destReg->is(InvalidRegClass)) {
-            // A pinned destination must wait for its real writeback; do not
-            // forward early (and do not perturb the pin bookkeeping).
-            if (!destReg->isPinned()) {
-                cpu->setReg(destReg, value, tid);
-                scoreboard->setReg(destReg);
-            }
+        if (destReg && !destReg->is(InvalidRegClass) &&
+            !destReg->isPinned()) {
+            cpu->setReg(destReg, value, tid);
+            scoreboard->setReg(destReg);
         }
     }
 
     inst->setLVPPrediction(lvp::LVPClassification::Constant, value);
 
-    // Wake only the register dependents; the load itself still executes and
-    // verifies normally in the load queue.
-    instQueue.wakeRegDependents(inst, /*isDeferred=*/true);
+    DPRINTF(EgDiff, "[tick:%llu] publish PC %#x sn:%llu val %#x\n",
+            curTick(), inst->pcState().instAddr(), inst->seqNum, value);
+
+    if (wake) {
+        // Wake only the register dependents; the load itself still executes
+        // and verifies normally in the load queue.
+        instQueue.wakeRegDependents(inst.get(), /*isDeferred=*/true);
+    }
+}
+
+void
+IEW::lvpSchedule(const DynInstPtr &inst, RegVal value, ThreadID tid,
+                 unsigned latency, bool wake)
+{
+    if (!inst)
+        return;
+
+    if (latency == 0) {
+        // Legacy immediate path (used by all existing gates).  Do not apply
+        // the isInROB() filter here: dispatch has not necessarily installed
+        // the ROB entry yet.
+        if (inst->numDestRegs() > 0) {
+            PhysRegIdPtr destReg = inst->renamedDestIdx(0);
+            // The legacy normal path did not skip a pinned destination; the
+            // deferred path did.  Preserve that distinction.
+            if (destReg && !destReg->is(InvalidRegClass) &&
+                (!wake || !destReg->isPinned())) {
+                cpu->setReg(destReg, value, tid);
+                scoreboard->setReg(destReg);
+            }
+        }
+        inst->setLVPPrediction(lvp::LVPClassification::Constant, value);
+        if (wake) {
+            instQueue.wakeRegDependents(inst.get(), /*isDeferred=*/true);
+        }
+        return;
+    }
+
+    auto *ev = new EventFunctionWrapper(
+        [this, inst, value, tid, wake]() {
+            lvpPublish(inst, value, tid, wake);
+        },
+        "EgDiffPredictionPublish", true);
+    cpu->schedule(ev, cpu->clockEdge(Cycles(latency)));
+}
+
+void
+IEW::lvpWakeDeferred(DynInst *inst, RegVal value)
+{
+    ThreadID tid = inst->threadNumber;
+
+    DPRINTF(LVP, "[tid:%i] EgDiff deferred wakeup: PC %s [sn:%llu] -> "
+            "schedule forward val %#x (+%u cycles)\n", tid, inst->pcState(),
+            inst->seqNum, value,
+            cpu->lvp->egdiffDeferredLatencyCycles());
+
+    // Hold a reference so a delayed publish cannot outlive the instruction.
+    DynInstPtr hold(inst);
+    lvpSchedule(hold, value, tid, cpu->lvp->egdiffDeferredLatencyCycles(),
+                /*wake=*/true);
 }
 
 void
 IEW::squashDueToMemOrder(const DynInstPtr& inst, ThreadID tid)
 {
+    DPRINTF(EgDiff, "[tick:%llu] squash PC %#x sn:%llu\n", curTick(),
+            inst->pcState().instAddr(), inst->seqNum);
     DPRINTF(IEW, "[tid:%i] Memory violation, squashing violator and younger "
             "insts, PC: %s [sn:%llu].\n", tid, inst->pcState(), inst->seqNum);
     // Need to include inst->seqNum in the following comparison to cover the
@@ -1063,21 +1124,20 @@ IEW::dispatchInsts(ThreadID tid)
                         inst->setLVPPrediction(
                             lvp::LVPClassification::Constant, result.value);
 
-                        if (inst->numDestRegs() > 0) {
-                            PhysRegIdPtr destReg = inst->renamedDestIdx(0);
-                            if (destReg &&
-                                !destReg->is(InvalidRegClass)) {
-                                cpu->setReg(destReg, result.value, tid);
-                                scoreboard->setReg(destReg);
+                        // The normal-latency event path is withdrawn: a
+                        // delayed PRF publish for every predicted load is not
+                        // safe with gem5's physical-register lifetime.  The
+                        // paper's normal 3-cycle latency is modelled by the
+                        // PoC probe-issue delay proxy instead; the deferred
+                        // +2 path uses lvpSchedule() and is validated.
+                        lvpSchedule(inst, result.value, tid, 0,
+                                    /*wake=*/false);
 
-                                DPRINTF(LVP, "[tid:%d] EgDiff dispatch: "
-                                    "PC %#x [sn:%llu] forwarding "
-                                    "predicted val %#x (d=%u) to %s\n",
-                                    tid, instPC, inst->seqNum,
-                                    result.value, result.distance,
-                                    destReg->className());
-                            }
-                        }
+                        DPRINTF(EgDiff, "[tick:%llu] schedule PC %#x "
+                            "[sn:%llu] predicted val %#x (d=%u, immediate; "
+                            "normal latency via probe-delay proxy)\n",
+                            curTick(), instPC, inst->seqNum, result.value,
+                            result.distance);
                     }
                 } else {
                     // effSize is 0 at dispatch (set during execute).

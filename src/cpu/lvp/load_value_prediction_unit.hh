@@ -102,6 +102,13 @@ class LoadValuePredictionUnit : public SimObject
     /** Whether the EgDiff global predictor (rather than FLOP) is selected. */
     bool isEgDiff() const { return predictorType == "egdiff"; }
 
+    /** Configured EgDiff prediction latencies (cycles; 0 = immediate). */
+    unsigned egdiffLatencyCycles() const { return egdiffLatency; }
+    unsigned egdiffDeferredLatencyCycles() const
+    {
+        return egdiffDeferredLatency;
+    }
+
     // =================================================================
     //  EgDiff (ISCA 2026) glue.  All in-flight instructions are referred
     //  to by (seqNum, opaque DynInst*) so that this header stays free of
@@ -153,6 +160,8 @@ class LoadValuePredictionUnit : public SimObject
 
     const bool enabled;
     const std::string predictorType;
+    const unsigned egdiffLatency;
+    const unsigned egdiffDeferredLatency;
     std::unique_ptr<EgDiffPredictor> egdiffPredictor;
 
     struct LVPStats : public statistics::Group

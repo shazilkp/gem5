@@ -78,6 +78,18 @@ class LoadValuePredictionUnit(SimObject):
         "(Layer-1 unit testing convenience; NOT the modelled hardware)"
     )
 
+    egdiffLatency = Param.Unsigned(
+        0,
+        "Reserved; must be 0. The paper's normal 3-cycle latency is modelled "
+        "by the PoC probe-issue delay proxy. The delayed normal-publish event "
+        "path is withdrawn because it corrupts physical-register lifetime."
+    )
+    egdiffDeferredLatency = Param.Unsigned(
+        0,
+        "EgDiff deferred-prediction latency in cycles after the base value "
+        "becomes available (paper: 2). Zero is immediate."
+    )
+
     lct = Param.LoadClassificationTable(
         LoadClassificationTable(), "Load Classification Table"
     )
