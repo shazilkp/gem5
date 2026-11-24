@@ -43,7 +43,7 @@ data access/verification.
 | **1** | **MATCH** | **ff** |
 | 2 | MATCH | ff |
 | 3 | MATCH | ff |
-| 4 | NO-MATCH | ef (one byte unresolved, no fabricated byte) |
+| 4 | NO-MATCH at REPS=16 | ef (byte 4 unresolved; no fabricated byte) — see note |
 | 6 | MATCH | ff |
 | 8 | MATCH | ff |
 | 10 | MATCH | ff |
@@ -55,9 +55,12 @@ Interpretation:
 
 - The race is real: with **zero** delay the attack fails; with **one** division
   it recovers all 8 bytes. Twelve divisions were conservative.
-- The `DIVS=4` run lost one byte (`known=ef`), i.e. the estimator abstained on
-  one byte rather than fabricating it. That is measurement variance, not a false
-  positive; a repeat would establish the rate.
+- The `DIVS=4` run at REPS=16 lost one byte (`known=ef`): byte 4 had **0/16
+  informative attempts** (all `sentinel_only`), so the estimator abstained
+  rather than fabricating. With `REPS=32`, the same configuration recovers
+  **32/32 per byte** and MATCH. This is a measurement false negative at low
+  attempt count, not a latency cutoff. Bytes 3 and 5 passed with only 5/16 and
+  4/16 votes, so the REPS=16 estimator is marginal at this delay.
 - Off controls at both ends recover nothing (`known=00`).
 
 ### Cycle margin (new trace)
