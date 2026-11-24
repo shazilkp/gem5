@@ -38,3 +38,6 @@ configs/dram/lowp_sweep.cfg
 .vscode
 typings
 .DS_Store
+
+# Local paper drafts (LaTeX source, PDF, class file)
+experiment/egdiff_eval/paper/
