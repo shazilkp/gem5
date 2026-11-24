@@ -355,8 +355,8 @@ Two further controls separate the observable from the recovery path
 **0** register-only divisions and recovers all 8 bytes at **1**, so the race is
 real and the 12-division PoC value is conservative. The cycle trace puts the
 probe's cache request **54–185 cycles** before verification at 1 division
-(avg 62) and **115–331 cycles** at 12 (avg 197); a 3–5 cycle probe-issue delay
-(proxy for predictor latency) still recovers. A branch-squash control
+(avg 62) and **115–331 cycles** at 12 (avg 197); the modelled +3/+2 predictor
+latency still recovers, as does a 3–5 cycle probe-issue proxy. A branch-squash control
 (`EGDIFF_ON=0`) leaves the probe line at **16** cycles after a branch
 misprediction versus **116** in the untouched-line null, so the fill survives a
 branch squash as well as `squashDueToMemOrder`; survival is a general cache
@@ -387,19 +387,21 @@ register-level forwarding would remain.
 
 ## 9. Limitations and threats to validity
 
-1. **Predictor latency/IPC.** The paper's **deferred +2** latency is modelled
-   (`egdiffDeferredLatency`) and the attack survives it (16/16 per byte). The
-   **normal +3** event path was withdrawn after it corrupted the run; a non-zero
-   `egdiffLatency` now fails fast. Normal latency is instead represented by a
-   probe-issue delay proxy: 3 and 5 dependent instructions still recover all 8
-   bytes. Cache-probe timing *is* modelled. Mode 1's address-delay sweep shows
-   the attack fails at 0 divisions and recovers at **1**; the cycle trace gives a
-   probe-request-to-verification margin of **54–185 cycles** at 1 division
-   (avg 62) and **115–331 cycles** at 12 (avg 197), so 3–5 cycles is well inside
-   the window. A branch-squash control (`squash` line 16 cycles vs `none` 116)
-   shows the fill survives a branch misprediction as well, so survival is a
-   general cache property, not a `squashDueToMemOrder` artifact. The observation
-   is still gem5-modelled, not a hardware result.
+1. **Predictor latency/IPC.** The paper's **normal +3** and **deferred +2**
+   latencies are modelled through a pending-publish stage: a `DynInst` pending
+   flag keeps the IQ destination not-ready, the publish is serviced from
+   `IEW::tick`, and commit/squash cancel outstanding publishes. The matrix
+   `0/0`, `3/0`, `0/2`, `3/2` and `5/2` all recover 8/8 with no corruption; the
+   trace shows +3/+2. PRF port pressure and write elision remain unmodelled.
+   A probe-issue delay proxy (3/5 instructions) is retained as an independent
+   sensitivity and also recovers. Cache-probe timing *is* modelled. Mode 1's
+   address-delay sweep shows the attack fails at 0 divisions and recovers at
+   **1**; the cycle trace gives a probe-request-to-verification margin of
+   **54–185 cycles** at 1 division (avg 62) and **115–331** at 12 (avg 197). A
+   branch-squash control (`squash` line 16 cycles vs `none` 116) shows the fill
+   survives a branch misprediction as well, so survival is a general cache
+   property, not a `squashDueToMemOrder` artifact. The observation is still
+   gem5-modelled, not a hardware result.
 2. **Non-disclosure convention, not isolation.** The attacker cannot *name* the
    value, but a native same-process attacker could read it; no MMU, privilege or
    cross-process claim. The `nm` check covers only `secret_*`/`v32_key`, not
@@ -539,7 +541,7 @@ Third-party pins: Monocypher `f8bb8dbd224556d58f5b4fa176c3f18fbfe50ebe`
 
 | claim | evidence | artifact | limitation |
 |---|---|---|---|
-| F1 structural conformance | paper-confirmed allocation/base rule, audited model, 117 checks | layers 1–6; `PAPER_NOTES.md` | trace-presence, no co-sim; optional EVES early population absent; timing not modelled |
+| F1 structural conformance | paper-confirmed allocation/base rule, audited model, 117 checks | layers 1–6; `PAPER_NOTES.md` | trace-presence, no co-sim; optional EVES early population absent; PRF port pressure not modelled (+3/+2 latency is) |
 | F2 behavioural ballpark | 22.9 % (3-bench) / 33.3 % (4) coverage, >99 % accuracy | `spec_coverage/` + `spec_f2.csv` | short window, ISA differs, unweighted, exclusions |
 | A1 mechanism | Mode 1/2, empty-message SipHash, verify32 word | layers 4–6 | same-process convention; Mode 2 estimator weak |
 | A2 specificity | off/FLOP controls | layers 4–6 | A4 `sink` is not a checksum; controls are same-binary |

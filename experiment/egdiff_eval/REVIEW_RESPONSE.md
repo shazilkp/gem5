@@ -50,7 +50,7 @@ Editor decision: **major revision**, then round 2.
 |---|---|---|---|
 | R1-1 | EVES may gate queue allocation | **resolved by paper** (unconditional allocation, distance-only base) | §2, §9.4, `PAPER_NOTES.md` |
 | R1-2 | 1024 window attribution; `fence.i`; squash reuse | fixed/clarified | §2 row, §5 Mode 2, §3 observable |
-| R1-3 | Mode 1 latency race not measured | **measured** (delay sweep + cycle trace + latency proxy) | §7.3, §9.1, `RESULTS_races.md` |
+| R1-3 | Mode 1 latency race not measured | **measured** (delay sweep + cycle trace + +3/+2 model) | §7.3, §9.1, `RESULTS_races.md` |
 | R1-4 | "architectural distance is a lower bound" | fixed | §9.3; A4 branchless, tool counts allocations |
 | R1-5 | commit-based accuracy tautological | **reviewer error**, formula fixed | §6 gives numerator/denominator; `README.md` too |
 | R1-6 | 22.9 % is post-hoc 3-benchmark mean | fixed | §7.1 reports all four, exclusions and numbers |
@@ -82,7 +82,7 @@ Editor decision: **major revision**, then round 2.
 
 | id | issue | disposition | where |
 |---|---|---|---|
-| R3-1 | no single estimator; Mode 2 fabricates 7 bytes | hardened (vote floor/known/byte 0/arch) but **still not null-clean**; open | §5, §7.3, §9.5/9.7 |
+| R3-1 | no single estimator; Mode 2 fabricates 7 bytes | **fixed** by `flush_drain()`; off control `known=00`; Mode 2 still crafted-victim only | §5, §7.3, §9.5/9.7 |
 | R3-2 | Layer 5 estimator weak | accepted | §9.6 |
 | R3-3 | "commit-based accuracy" misnomer | fixed | §6 formula and non-partition caveat |
 | R3-4 | prevalence prose contradicted by CSV | fixed | `prevalence.md` lines 79, 371 |
@@ -117,16 +117,17 @@ Editor decision: **major revision**, then round 2.
    realistic case.
 3. **Null-calibrated estimator for Mode 2** (R3-1). The vote floor, 2× margin,
    `known` mask, byte-0 inclusion and `reg == SENTINEL` check are in, but the
-   off control still emits 7 wrong bytes and FLOP emits 8 zero bytes. The
-   residual is a deterministic scan/set bias; randomized scan order, per-line
-   baseline and a known-non-secret control are required. Drop Mode 2 from the
-   claims if it cannot be made null-clean.
+   the original scan bias was a missing `flush_drain()` after `flush_l1()`.
+   With the drain, the off control is `known=00`; FLOP emits its own
+   constant-zero prediction (`known=ff`, `NO-MATCH`). Mode 2 remains a
+   crafted-victim conformance experiment, not a real-target attack.
 4. **Layer 5 estimator** (R3-2). Add a vote floor and 2× margin; re-run and
    report emissions, not just correctness.
 5. ~~**Mode 1 cycle-margin sensitivity** (R1-3)~~ — done:
-   `RESULTS_races.md` (108–370 cycle margin at 1 division; 230–662 at 12;
-   deferred +2 survives; probe-delay proxy 3/5 survives). The normal-latency
-   event path was withdrawn as unsafe.
+   `RESULTS_races.md` (54–185 cycle margin at 1 division; 115–331 at 12).
+   The normal +3 and deferred +2 latencies are now modelled via the
+   pending-publish stage and both survive; the probe-delay proxy 3/5 is an
+   additional sensitivity.
 6. **Differential co-simulation** against `egdiff_sim.py` (R1-9).
 7. ~~**Paper quote for EVES/queue allocation** (R1-1)~~ — resolved:
    Section III-B allocates all candidates; see `PAPER_NOTES.md`.

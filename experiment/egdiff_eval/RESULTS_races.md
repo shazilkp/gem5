@@ -87,39 +87,42 @@ Implemented as `egdiffLatency` (normal) and `egdiffDeferredLatency` (after base
 completion) on `LoadValuePredictionUnit`, published through an event in
 `IEW::lvpSchedule`. Defaults are 0 to preserve the existing gates.
 
-First event-based matrix (`DIVS=12` unless noted):
+The first event-based attempt failed: normal +3 corrupted the run (`runnerup`
+negative, abort at +5). The root cause was not the latency itself but the IQ:
+`IEW::dispatchInsts` called `setLVPPrediction()` at dispatch, and
+`InstructionQueue::addToProducers` marks a predicted destination ready
+immediately. Consumers therefore issued before the delayed PRF write.
+
+Fixed with a **pending-publish stage**:
+
+- `DynInst` has a pending flag; the IQ marks a destination ready only when
+  `lvpPredictionAvailable()`.
+- `IEW` keeps a `seqNum`-indexed pending map serviced from `tick()` after squash;
+  commit and squash cancel pending publishes.
+- Deferred predictions carry a `pending` state in `EgDiffSpecEntry`;
+  `publishDeferred()` makes the value visible at the publish tick. If the
+  dependent completes first, its actual value is retained and the pending
+  prediction is dropped.
+
+Final matrix (`DIVS=12` unless noted):
 
 | normal | deferred | result |
 |---|---|---|
 | 0 | 0 | MATCH, 16/16 per byte |
-| 0 | 2 | **MATCH, 16/16 per byte** |
-| 3 | 0 | NO-MATCH; `runnerup` goes negative → memory corruption |
-| 3 | 2 | NO-MATCH |
-| 5 | 2 (`DIVS=1`) | gem5 abort: illegal instruction at a stack address |
+| 3 | 0 | **MATCH, 16/16** |
+| 0 | 2 | **MATCH, 16/16** |
+| 3 | 2 | **MATCH, 16/16** |
+| 5 | 2 | **MATCH, 8/8** |
 
-The deferred `+2` path is clean and the attack survives it. The **normal**
-latency path is **not trustworthy**: a 3-cycle delay cannot plausibly kill an
-attack with a ~240-cycle address delay, and the negative `runnerup` values plus
-the illegal-instruction abort show that the delayed publish/wake corrupts the
-program. This is a bug in the event path, not a result.
+No negative `runnerup`, no aborts. Trace:
 
-Safe proxy (prompt's allowed alternative): delay the dependent probe's issue by
-`PROBE_DELAY` real `addi` instructions, with `EGDIFF_LATENCY=0` (normal event
-disabled). Results:
+```
+[tick:208594500] schedule-publish PC 0x10788 sn:94000 val 0 at 208596000 (+3)
+[tick:208596000] publish PC 0x10788 sn:94000 val 0
+[tick:200016000] schedule-publish PC 0x106d4 sn:92630 val 0 at 200017000 (+2 deferred)
+[tick:200017000] publish PC 0x106d4 sn:92630 val 0 (deferred)
+```
 
-| probe delay | address delay | deferred | result |
-|---|---|---|---|
-| 0, 1, 3, 5 | 12 | 0 | MATCH, 8/8 |
-| 0, 3 | 1 | 0 | MATCH, 8/8 |
-| 0 | 12 | 2 | MATCH, 8/8 |
-| 3 | 12 | 2 | MATCH, 8/8 |
-
-A 3–5 cycle later probe issue is harmless, consistent with the 54–331 cycle
-measured margin.
-
-The normal-latency event path was then **withdrawn**: it still corrupted the
-run with `wake=false` and with `isInROB()`/`isCommitted()` guards. A non-zero
-`egdiffLatency` now fails fast:
-`fatal: egdiffLatency=3 is not supported...`. The deferred `+2` path remains
-implemented and validated. The paper's normal 3-cycle latency is represented by
-the probe-issue delay proxy, not by the withdrawn event path.
+1500 ticks = 3 cycles at the 2 GHz tick rate. The probe-issue delay proxy
+(0/1/3/5 `addi`) remains an independent sensitivity control and also recovers;
+it is no longer a substitute for the predictor-latency model.
