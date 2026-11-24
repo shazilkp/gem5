@@ -62,6 +62,16 @@ flush_l1(void)
         (void)flushbuf[i];
 }
 
+/* Drain the eviction's outstanding misses before the replay.  Without this,
+ * the L1D MSHRs are still occupied by the flush when the probe issues, and a
+ * deterministic line wins the latency scan even when no prediction was
+ * forwarded.  This is outside the transient window (it precedes the replay). */
+static inline void
+flush_drain(void)
+{
+    asm volatile("fence.i" ::: "memory");
+}
+
 __attribute__((noinline, noclone))
 static uint64_t
 atk_load(volatile uint64_t *base, uint64_t idx)
@@ -119,6 +129,7 @@ main(void)
             /* ---- Replay: base = 0 at d = 1, no helper call ---- */
             atk_buf[0] = SENTINEL;
             flush_l1();
+            flush_drain();
 
             uint64_t z = zero_buf[0];
             uint64_t x = z | 1;

@@ -95,9 +95,12 @@ fi
 
 echo "== Mode 2: commit-time NVQ capture + replay =="
 if [ -z "$ONLY" ] || [ "$ONLY" = "2" ]; then
-    run_case poc_v2_nvq_fence_bypass poc_v2_nvq_fence_bypass.c egdiff 1 on  MATCH
-    run_case poc_v2_nvq_fence_bypass poc_v2_nvq_fence_bypass.c egdiff 0 off NO-MATCH
-    run_case poc_v2_nvq_fence_bypass poc_v2_nvq_fence_bypass.c flop   1 flop NO-MATCH
+    # Off must emit nothing (known=00) after the flush_drain fix.  FLOP is
+    # allowed to emit its own constant-zero prediction (known=ff) but must not
+    # match the secret.
+    run_case poc_v2_nvq_fence_bypass poc_v2_nvq_fence_bypass.c egdiff 1 on  MATCH    known=ff
+    run_case poc_v2_nvq_fence_bypass poc_v2_nvq_fence_bypass.c egdiff 0 off NO-MATCH known=00
+    run_case poc_v2_nvq_fence_bypass poc_v2_nvq_fence_bypass.c flop   1 flop NO-MATCH known=ff
     # The harness asserts its own architectural precondition; require it.
     grep -aq "arch=OK" "$WORK/poc_v2_nvq_fence_bypass.on/stdout" \
         && ok "mode 2: architectural precondition holds" \

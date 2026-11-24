@@ -200,12 +200,14 @@ Mode 2's fence is a **harness ordering device**, not a security claim: gem5
 models `FENCE.I` as a pipeline drain, but on RISC-V `FENCE.I` orders instruction
 fetch, not data. The claim is that the victim load has committed before the
 replay (guaranteed by the call/return and the harness fence) and the NVQ persists
-by definition. Mode 2's estimator is weaker than Mode 1's: `argmax` over slots
-`1..255` with a 20-cycle lead, **no vote floor and no known mask**, and byte
-`0x00` is excluded. Its `EGDIFF_ON=0` control emits seven bytes
-(`3f3f3f3f3f3f3f00`), all incorrect; the verdict is NO-MATCH, but this is a
-fabrication-risk demonstration, not a clean zero. A vote floor/known mask for
-Mode 2 is future work.
+by definition. Mode 2's estimator now includes a 3/7 vote floor, a 2× runner-up
+margin, a `known` mask, byte-0 inclusion, and a `reg == SENTINEL` architectural
+check. The decisive fix was a `flush_drain()` after `flush_l1()`: without it,
+the eviction's outstanding MSHRs made a deterministic line win even with the
+predictor off. With the drain, the `EGDIFF_ON=0` control is **`known=00`**. The
+FLOP control legitimately emits its own constant-zero prediction (`known=ff`,
+value 0) and is `NO-MATCH`; that is a real FLOP fill, not a measurement artifact.
+Mode 2 remains a crafted-victim conformance experiment, not a real-target attack.
 
 **Real targets.** SipHash-2-4 (`d = 5, 6`) **on the empty-message path only**:
 with a non-empty message the key loads are followed by hundreds of state/message
@@ -409,15 +411,17 @@ register-level forwarding would remain.
    implement the baseline. This cannot remove the attack — it can only make
    bases available sooner — though it could add attacker-visible bases from the
    local predictor, which we do not model.
-5. **Mode 2 estimator is not null-clean.** A vote floor (3/7), 2× margin,
-   `known` mask, byte-0 inclusion and a `reg == SENTINEL` architectural check
-   were added after the first review. The off control still emits seven wrong
-   bytes (`known=fe`) and the FLOP control emits eight zero bytes (`known=ff`).
-   The residual is a deterministic scan/set bias, not random noise, so the on
-   run's correctness is necessary but not sufficient. Mode 2 is provisional
-   until a null-calibrated estimator (randomized scan, per-line baseline,
-   known-non-secret control) is built. Its fence is also a harness ordering
-   device: gem5's `FENCE.I` drain is not a RISC-V data fence.
+5. **Mode 2 estimator and replay.** The estimator now has a 3/7 vote floor,
+   2× margin, `known` mask, byte-0 inclusion and a `reg == SENTINEL` check.
+   The original scan bias was caused by a missing `flush_drain()` after
+   `flush_l1()`; with the drain, the `EGDIFF_ON=0` control is **`known=00`** and
+   the on-run remains 8/8. FLOP emits its own constant-zero prediction
+   (`known=ff`, value 0), which is a real fill and `NO-MATCH`. Mode 2 is still a
+   crafted-victim conformance experiment, not a real-target attack, and its
+   straight-line replay re-commits the sentinel and re-polls the entry, which is
+   why it needs 16,800 victim calls rather than a branch-shadow replay. Its
+   fence is a harness ordering device: gem5's `FENCE.I` drain is not a RISC-V
+   data fence.
 6. **Layer 5 estimator is weak.** `REPS = 5`, fixed 20-cycle margin, bare
    majority, no vote floor. It produced 0/16 in both controls, but one lucky
    attempt could decide a byte.
