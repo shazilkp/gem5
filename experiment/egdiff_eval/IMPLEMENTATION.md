@@ -272,6 +272,37 @@ SipHash call, so the base is L1-resident and available at `L_atk` rename. Layer 
 therefore exercises the base-available/committed-NVQ forward path; the deferred
 path is covered by Layer 3 and Mode 2.
 
+### F2 — behavioural conformance on SPEC CPU2017
+`experiment/egdiff_eval/spec_coverage/` (`run_spec.py`, `README.md`).
+
+Method: static RISC-V SPEC CPU2017 refrate binaries, O3CPU + `--caches
+--l2cache`, 30M-instruction window, coverage and accuracy measured **at commit**
+(a prediction counts only if its load commits). The commit-time accounting was
+necessary: `557.xz` dispatches 1.78M predicted loads against 0.20M committed
+ones because of ~2M branch-misprediction squashes, so dispatch-time ratios are
+meaningless on branchy code.
+
+| benchmark | committed loads | coverage | accuracy |
+|---|---|---|---|
+| 505.mcf | 6,426,344 | 64.51% | 99.99% |
+| 544.nab | 5,527,140 | 28.38% | 99.60% |
+| 548.exchange2 | 4,951,309 | 17.52% | 99.49% |
+| 510.parest | 5,161,173 | 22.84% | 99.83% |
+
+Mean over the four: **33.3% coverage, 99.73% accuracy**; excluding `505.mcf`
+(pointer chasing — the paper's own motivating shape — hence high coverage), the
+remaining three average **22.9% coverage**, inside the paper's reported 22–26 %,
+with accuracy 99.5–99.8 % against the paper's >99 %.
+
+Excluded, with reasons recorded in the README: `519.lbm` (SE register-only spin),
+`503.bwaves` (exits after ~138k instructions), `557.xz` (squash-heavy, 8x slower),
+`531.deepsjeng` (first 30M instructions are a 720 MB hash-table zeroing loop).
+
+**Conclusion for F2:** the model behaves like the paper's predictor in the
+aggregate — high accuracy and coverage in the expected band. It is not a
+reproduction of the paper's per-benchmark numbers (different ISA, hash, memory
+hierarchy, window length, no SimPoints).
+
 ### Code ownership and the threat model (F2)
 The target value (Layers 4) and the SipHash key (Layer 5) live in a separate
 translation unit, `egdiff_secret.c`, as `static` objects. Only the helper
