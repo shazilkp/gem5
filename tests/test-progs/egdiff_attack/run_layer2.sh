@@ -75,14 +75,20 @@ msn=$(grep -a "EgDiff MISMATCH" "$T1" | head -1 | sed -E 's/.*\[sn:([0-9]+)\].*/
 if [ -n "${msn:-}" ]; then
     # Collect the sequence number at which every value is forwarded, from both
     # the normal dispatch path and the deferred wakeup path.
-    issued() {
-        { grep -aE "\[sn:[0-9]+\] dispatch PC .* predicts" "$T1" \
-            | sed -E 's/^[0-9]+: .*\[sn:([0-9]+)\].*/\1/'
+    # New predictions issued at dispatch.  A deferred publish for a load that
+    # was already dispatched before the mismatch is allowed: the window
+    # suppresses future predictions, not already-bound ones.
+    issued_dispatch() {
+        grep -aE "\[sn:[0-9]+\] dispatch PC .* predicts" "$T1" \
+            | sed -E 's/^[0-9]+: .*\[sn:([0-9]+)\].*/\1/' | sort -n
+    }
+    issued_all() {
+        { issued_dispatch
           grep -aE "deferred wakeup -> publish" "$T1" \
             | sed -E 's/.*\[dep:([0-9]+)\].*/\1/'; } | sort -n
     }
-    inside=$(issued | awk -v t="$msn" '$1 > t && $1 <= t+1024' | head -1)
-    after=$(issued  | awk -v t="$msn" '$1 > t+1024' | head -1)
+    inside=$(issued_dispatch | awk -v t="$msn" '$1 > t && $1 <= t+1024' | head -1)
+    after=$(issued_all     | awk -v t="$msn" '$1 > t+1024' | head -1)
     [ -z "$inside" ] && ok "no value forwarded during the 1024-inst blackout" \
                      || bad "value forwarded at sn $inside inside the blackout"
     [ -n "$after" ]  && ok "predictions resumed after the blackout" \

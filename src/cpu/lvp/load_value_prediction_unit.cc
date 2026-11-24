@@ -310,11 +310,14 @@ LoadValuePredictionUnit::dispatchLoad(uint64_t seqNum, Addr instPC,
     if (!egdiffPredictor)
         return EgDiffPredictResult();
 
-    if (egdiffPredictor->predictionSuppressed(seqNum))
-        ++stats.egdiffLastMispSuppressed;
-
     const EgDiffPredictResult r =
         egdiffPredictor->dispatchLoad(instPC, seqNum, inst);
+
+    // Count only loads that would actually have produced a prediction; do not
+    // count every load dispatched during the window, and do not double-count
+    // skid-buffer re-dispatches (dispatchLoad is idempotent by seqNum).
+    if (r.suppressed)
+        ++stats.egdiffLastMispSuppressed;
 
     if (r.allocated)
         ++stats.egdiffDispatchedLoads;
@@ -354,9 +357,8 @@ LoadValuePredictionUnit::completeLoad(uint64_t seqNum, RegVal actualVal,
         if (!r.ok) {
             ++stats.numPredictionIncorrect;
             DPRINTF(EgDiff, "[tick:%llu] [sn:%llu] MISMATCH actual %#x -> "
-                    "squash, suppress until %#llx\n", curTick(), seqNum,
-                    actualVal,
-                    (unsigned long long)egdiffPredictor->getSuppressUntil());
+                    "squash; lastMisp window starts at the squash\n",
+                    curTick(), seqNum, actualVal);
         } else {
             ++stats.numPredictionCorrect;
             DPRINTF(EgDiff, "[sn:%llu] verified actual %#x\n",
@@ -384,6 +386,13 @@ LoadValuePredictionUnit::completeLoad(uint64_t seqNum, RegVal actualVal,
     }
 
     return r.ok;
+}
+
+void
+LoadValuePredictionUnit::dispatchInstruction()
+{
+    if (egdiffPredictor)
+        egdiffPredictor->dispatchInstruction();
 }
 
 void

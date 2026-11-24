@@ -1159,6 +1159,12 @@ IEW::dispatchInsts(ThreadID tid)
             break;
         }
 
+        // This instruction is actually being dispatched on the correct path.
+        // Count it for EgDiff's lastMisp window (1024 instructions, not fetch
+        // sequence numbers; squashed wrong-path instructions never reach here).
+        if (cpu->lvp && cpu->lvp->isEnabled() && cpu->lvp->isEgDiff())
+            cpu->lvp->dispatchInstruction();
+
         // hardware transactional memory
         // CPU needs to track transactional state in program order.
         const int numHtmStarts = ldstQueue.numHtmStarts(tid);

@@ -151,7 +151,10 @@ EgDiffPredictor::dispatchLoad(Addr pc, uint64_t seqNum, void *inst)
 
     const size_t curIdx = specGVQ.size();
 
-    if (!predictionSuppressed(seqNum) && tagMatch && e.ctr == MAXCONF) {
+    if (tagMatch && e.ctr == MAXCONF && predictionSuppressed())
+        res.suppressed = true;
+
+    if (!predictionSuppressed() && tagMatch && e.ctr == MAXCONF) {
         // Section III-A / Table I: a predicted load carries the distance and
         // diff that were in force at dispatch.  Commit must use this snapshot,
         // not the live table entry, because an earlier instance of the same PC
@@ -235,7 +238,11 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
             q.value = actualVal;
             q.vp = false;
             q.avail = true;
-            suppressUntil = seqNum + LAST_MISP_WINDOW;
+            // Start the 1024-instruction window when the resulting squash
+            // happens, so wrong-path instructions fetched after this load do
+            // not consume the window.
+            suppressPending = true;
+            suppressUntilCount = 0;
             res.ok = false;
         } else {
             q.avail = true;
@@ -274,7 +281,7 @@ EgDiffPredictor::completeLoad(uint64_t seqNum, RegVal actualVal)
                 // relative distance shifted) -> ignore the obsolete binding.
                 res.wakeIgnored = true;
                 res.wakeIgnoredSeq = dep.seqNum;
-            } else if (res.ok && !predictionSuppressed(dep.seqNum)) {
+            } else if (res.ok && !predictionSuppressed()) {
                 const uint64_t predVal = actualVal + dep.diff;
                 // The value exists but is not visible yet.  `vp` is set by
                 // publishDeferred() when the microarchitecture actually
@@ -332,6 +339,13 @@ EgDiffPredictor::squashFrom(uint64_t squashNum)
             ++cleared;
         }
     }
+
+    // A value misprediction requested a window; start it now, after the
+    // squash, so only correct-path instructions consume the 1024 slots.
+    if (suppressPending) {
+        suppressUntilCount = instructionCount + LAST_MISP_WINDOW;
+        suppressPending = false;
+    }
     return cleared;
 }
 
@@ -349,7 +363,9 @@ EgDiffPredictor::reset()
     nvq.fill(0);
     specGVQ.clear();
     tickCounter = 0;
-    suppressUntil = 0;
+    suppressUntilCount = 0;
+    suppressPending = false;
+    instructionCount = 0;
 }
 
 } // namespace lvp

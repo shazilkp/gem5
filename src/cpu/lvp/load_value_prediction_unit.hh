@@ -129,6 +129,9 @@ class LoadValuePredictionUnit : public SimObject
     EgDiffPredictResult dispatchLoad(uint64_t seqNum, Addr instPC,
                                      void *inst);
 
+    /** Count one correctly-dispatched instruction for the lastMisp window. */
+    void dispatchInstruction();
+
     /**
      * Load-completion hook (Layer 2/3): record the actual value, verify
      * any prediction, and fire a deferred wakeup if this load is a bound

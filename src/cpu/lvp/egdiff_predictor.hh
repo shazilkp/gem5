@@ -92,6 +92,7 @@ struct EgDiffPredictResult
     bool deferred = false;    // waiting on an unavailable base load
     bool nvqBase = false;     // base came from the committed NVQ (curIdx < d)
     bool allocated = false;   // a new speculative-queue slot was allocated
+    bool suppressed = false;  // would predict, but lastMisp is active
     uint64_t value = 0;
     uint8_t distance = 0;
     uint64_t baseVal = 0;     // value of the slot used as the base
@@ -189,12 +190,19 @@ class EgDiffPredictor
     /** Pop a committed load from the front of the speculative queue. */
     void retireFront(uint64_t seqNum);
 
-    bool predictionSuppressed(uint64_t seqNum) const
+    /**
+     * Count every instruction dispatched on the correct path.  The lastMisp
+     * window is a 1024-instruction window, not a fetch-sequence-number
+     * interval: squashed wrong-path instructions must not consume it.
+     */
+    void dispatchInstruction() { ++instructionCount; }
+
+    bool predictionSuppressed() const
     {
-        return suppressUntil != 0 && seqNum <= suppressUntil;
+        return suppressUntilCount != 0 && instructionCount <= suppressUntilCount;
     }
 
-    uint64_t getSuppressUntil() const { return suppressUntil; }
+    uint64_t getSuppressUntil() const { return suppressUntilCount; }
     const std::deque<EgDiffSpecEntry> &getSpecGVQ() const { return specGVQ; }
     size_t specGVQSize() const { return specGVQ.size(); }
 
@@ -214,7 +222,9 @@ class EgDiffPredictor
     std::deque<EgDiffSpecEntry> specGVQ;
 
     uint32_t tickCounter = 0;
-    uint64_t suppressUntil = 0;
+    uint64_t suppressUntilCount = 0;
+    bool suppressPending = false;
+    uint64_t instructionCount = 0;
 
     const bool coldDeterministicAlloc;
     std::mt19937_64 rng;
