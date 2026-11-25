@@ -27,6 +27,8 @@ from m5.objects import StridePrefetcher  # noqa: E402
 
 PAPER_CONFIG = os.environ.get("EGDIFF_PAPER_CONFIG", "0") not in (
     "0", "false", "no")
+PAPER_PREFETCH = os.environ.get("EGDIFF_PAPER_PREFETCH", "0") not in (
+    "0", "false", "no")
 PRED_TYPE = os.environ.get("EGDIFF_TYPE", "egdiff")
 PRED_ON = os.environ.get("EGDIFF_ON", "1") not in ("0", "false", "no")
 TABLE = int(os.environ.get("EGDIFF_TABLE", "4096"))
@@ -78,7 +80,8 @@ def _egdiff_config_cache(options, system):
                 cpu.dcache.tag_latency = 1
                 cpu.dcache.data_latency = 1
                 cpu.dcache.response_latency = 1
-                cpu.dcache.prefetcher = StridePrefetcher(degree=4)
+                if PAPER_PREFETCH:
+                    cpu.dcache.prefetcher = StridePrefetcher(degree=4)
             if cpu.icache:
                 cpu.icache.tag_latency = 1
                 cpu.icache.data_latency = 1
@@ -92,7 +95,8 @@ def _egdiff_config_cache(options, system):
             system.l3.data_latency = 10
             system.l3.response_latency = 11
         print("[egdiff] PAPER_CONFIG: 4GHz, L1 32K/4-way, L2 256K/8-way, "
-              "L3 2M/16-way, L-TAGE, 168 regs, ROB/IQ/LQ/SQ 192/64/32/32")
+              "L3 2M/16-way, L-TAGE, 168 regs, ROB/IQ/LQ/SQ 192/64/32/32, "
+              "L1 prefetcher=%s" % ("on" if PAPER_PREFETCH else "off"))
 
     for cpu in system.cpu:
         lvp = cpu.loadValuePredictor
