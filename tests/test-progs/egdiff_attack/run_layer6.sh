@@ -37,6 +37,8 @@ BIN="$D/poc_verify32"
 # The paper's prediction text uses the speculative queue.  The A4 gate is
 # strict by default (no NVQ base); set EGDIFF_NVQ_BASE=1 for the extension.
 NVQ_BASE="${EGDIFF_NVQ_BASE:-0}"
+L2FLAG=""
+[ "${EGDIFF_PAPER_CONFIG:-0}" != "0" ] && L2FLAG="--l2cache"
 
 [ -x "$GEM5" ] || { echo "missing gem5: $GEM5"; exit 1; }
 [ -f "$MONO/monocypher.c" ] || { echo "missing Monocypher: $MONO"; exit 1; }
@@ -157,7 +159,7 @@ run_case() { # run_case <tag> <type> <enabled>
     rm -rf "$out"; mkdir -p "$out"
     EGDIFF_TYPE="$type" EGDIFF_ON="$on" EGDIFF_NVQ_BASE="$NVQ_BASE" \
     timeout 1800 "$GEM5" -d "$out" \
-        configs/example/egdiff.py --cpu-type=O3CPU --caches \
+        configs/example/egdiff.py --cpu-type=O3CPU --caches $L2FLAG \
         --cmd="$PWD/$BIN" --options="attack $SPEC" > "$out/stdout" 2>&1 || true
     echo "  [$tag] $(grep -a 'verify32_attack key_word=' "$out/stdout" | tail -1)"
 }

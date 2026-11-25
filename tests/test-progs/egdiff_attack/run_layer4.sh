@@ -28,6 +28,8 @@ ONLY="${ONLY:-}"
 SECRET="${SECRET:-}"
 DEFS=""
 [ -n "$SECRET" ] && DEFS="-DSECRET_VAL=${SECRET}ULL"
+L2FLAG=""
+[ "${EGDIFF_PAPER_CONFIG:-0}" != "0" ] && L2FLAG="--l2cache"
 
 [ -x "$GEM5" ] || { echo "missing gem5: $GEM5"; exit 1; }
 
@@ -44,7 +46,7 @@ run_case() { # run_case <name> <src> <type> <enabled> <tag> <verdict-token> <dst
     rm -rf "$out"; mkdir -p "$out"
     EGDIFF_TYPE="$type" EGDIFF_ON="$on" \
     timeout 1800 "$GEM5" -d "$out" \
-        configs/example/egdiff.py --cpu-type=O3CPU --caches \
+        configs/example/egdiff.py --cpu-type=O3CPU --caches $L2FLAG \
         --cmd="$bin" > "$out/stdout" 2>&1
     local line verdict
     line=$(grep -a "secret=" "$out/stdout" | tail -1)
