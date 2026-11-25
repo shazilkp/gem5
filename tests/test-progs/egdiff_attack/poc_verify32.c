@@ -60,7 +60,7 @@ extern int oracle_report_verify32(uint64_t recovered, uint64_t known_mask,
 #define REPS      16                     /* attempts per byte                */
 #endif
 #define MIN_VOTES 2
-#define FLUSH_SZ  (128 * 1024)
+#define FLUSH_SZ  (512 * 1024)
 
 #define SENTINEL  0xA5A5A5A5A5A5A5A5ULL
 
@@ -309,9 +309,10 @@ measure_lane(int dist, int *votes_out, int *arch_ok_out)
         uint64_t t_cold = sum / LINES;
         uint64_t thresh = t_arch + (t_cold - t_arch) / 2;
 
-        if (t_arch * 4 >= t_cold) {
+        if (t_arch * 2 >= t_cold) {
             /* Hot/cold gap collapsed: the cache was not cold or the suffix did
-             * not re-execute.  This attempt carries no information. */
+             * not re-execute.  The attempt carries no information.  L2/L3
+             * cold lines are L3 hits, so require 2x rather than 4x. */
             continue;
         }
 

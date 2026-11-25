@@ -93,7 +93,9 @@
 #define PROBE_DELAY 0          /* dependent-probe issue delay in instructions */
 #endif
 #define MIN_VOTES  2
-#define FLUSH_SZ   (128 * 1024)
+/* Cover the paper-style 256 KiB L2, not just the L1.  With only 128 KiB the
+ * probe array remains resident in L2 and every lane is ambiguous. */
+#define FLUSH_SZ   (512 * 1024)
 
 /* Two architectural sentinels whose bytes differ at every position. */
 #define SENT0      0xA5A5A5A5A5A5A5A5ULL
@@ -148,6 +150,18 @@ time_line(int k)
     uint8_t v = *q;
     asm volatile("" :: "r"(v) : "memory");
     return rdcycle() - t1;
+}
+
+/* Scan in bit-reversed order so the L1 stride prefetcher cannot fill the
+ * next probe lines ahead of the timing loop.  With a sequential scan the
+ * prefetcher makes many lines fast and every lane looks ambiguous. */
+static inline int
+scan_index(int j)
+{
+    int k = 0;
+    for (int b = 0; b < 8; b++)
+        k = (k << 1) | ((j >> b) & 1);
+    return k;
 }
 
 /* The experimenter's own load.  One static PC, used for training and for the
@@ -295,7 +309,8 @@ main(void)
 
             /* ---- 7. Measure every line, including the sentinel line ---- */
             uint64_t sum = 0;
-            for (int k = 0; k < LINES; k++) {
+            for (int j = 0; j < LINES; j++) {
+                int k = scan_index(j);
                 lat[k] = time_line(k);
                 sum += lat[k];
             }
@@ -306,10 +321,12 @@ main(void)
             uint64_t t_cold = (sum - t_arch) / (LINES - 1);
             uint64_t thresh = t_arch + (t_cold - t_arch) / 2;
 
-            if (t_arch * 4 >= t_cold) {
-                /* The hot/cold gap collapsed: the cache was not cold or the
+            if (t_arch * 2 >= t_cold) {
+                /* Hot/cold gap collapsed: the cache was not cold or the
                  * suffix did not re-execute.  The attempt carries no
-                 * information. */
+                 * information.  A 2x gate is used because L2/L3 cold lines
+                 * are L3 hits, not DRAM misses, so the gap is smaller than
+                 * in the L1-only configuration. */
                 n_invalid++;
                 continue;
             }
